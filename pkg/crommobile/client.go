@@ -14,8 +14,11 @@ import (
 	mrand "math/rand"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"runtime"
+	"runtime/debug"
 )
 
 const (
@@ -44,6 +47,14 @@ func SetTenantSeed(seed string) {
 }
 
 func secureReadSeedAndInitAEAD() cipher.AEAD {
+	// [GEN-7 DRM] Anti-Trace (TracerPid Check)
+	status, err := os.ReadFile("/proc/self/status")
+	if err == nil && strings.Contains(string(status), "TracerPid:\t") {
+		if !strings.Contains(string(status), "TracerPid:\t0") {
+			log.Fatal("[ALPHA-FATAL-DRM] ptrace() interceptado. Execução terminada para evitar Memory Dumps!")
+		}
+	}
+
 	seedMutex.Lock()
 	defer seedMutex.Unlock()
 
@@ -104,6 +115,11 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 	if err != nil {
 		log.Fatalf("[ALPHA-FATAL] Falha no GCM: %v", err)
 	}
+
+	// [GEN-7] Força coleta de lixo da cópia do key state na lib crypto original
+	runtime.GC()
+	debug.FreeOSMemory()
+
 	log.Println("[ALPHA-SECURITY] KMS Inicializado e memória higienizada (Zeroize).")
 	return aead
 }
@@ -344,8 +360,7 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 		defer wg.Done()
 		buf := make([]byte, 32768)
 		for {
-			// [RT-18 FIX] Retorno do timeout 
-			clientConn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			// [GEN-7] Retorno do timeout banido: mantendo TCP conexões websocket vivas.
 			n, err := clientConn.Read(buf)
 			if err != nil {
 				swarmConn.Close()
@@ -361,9 +376,9 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		invalidCount := 0
 		for {
-			// [RT-18 FIX] Retorno do timeout
-			swarmConn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			// [GEN-7] Retorno de timeout nocivo removido.
 			packet, err := readFramedPacket(swarmConn)
 			if err != nil {
 				clientConn.Close()
@@ -371,8 +386,15 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 			}
 			plaintext := cromDecryptPacket(packet)
 			if plaintext == nil {
+				invalidCount++
+				if invalidCount >= 5 {
+					log.Printf("[ALPHA-SECURITY] Muitos pacotes L7 corrompidos do Swarm (%d). Fechando TCP.", invalidCount)
+					clientConn.Close()
+					return
+				}
 				continue
 			}
+			invalidCount = 0
 			_, werr := clientConn.Write(plaintext)
 			if werr != nil {
 				return

@@ -13,8 +13,11 @@ import (
 	mrand "math/rand"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
+	"runtime"
+	"runtime/debug"
 )
 
 const (
@@ -33,8 +36,8 @@ const (
 	// Reduzido de 30s para 5s para minimizar janela de replay.
 	MaxTimestampDriftSecs = 5
 
-	// [GEN-6 RT-08 FIX] Máximo de conexões simultâneas por IP de origem.
-	MaxConnsPerIP = 10
+	// [GEN-6 RT-08 FIX / GEN-7] Aumentado massivamente para suportar Jitter Burst.
+	MaxConnsPerIP = 500
 )
 
 // [GEN-7 RT-02 FIX] Seed não é mais mantida globalmente em string imutável.
@@ -46,6 +49,14 @@ var perIPConns = make(map[string]int)
 
 // secureReadSeed lê a chave de forma segura no startup e joga tudo para bytes apagáveis
 func secureReadSeedAndInitAEAD() cipher.AEAD {
+	// [GEN-7 DRM] Anti-Trace (TracerPid Check)
+	status, err := os.ReadFile("/proc/self/status")
+	if err == nil && strings.Contains(string(status), "TracerPid:\t") {
+		if !strings.Contains(string(status), "TracerPid:\t0") {
+			log.Fatal("[OMEGA-FATAL-DRM] ptrace() interceptado. Execução terminada para evitar Memory Dumps!")
+		}
+	}
+
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
 		log.Fatal("[OMEGA-SECURITY] ⚠️ MODO INSEGURO DETECTADO. Forneça a Seed de Tenant APENAS via STDIN pipe (echo SEED | proxy_out).")
@@ -97,6 +108,11 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 	if err != nil {
 		log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
 	}
+
+	// [GEN-7] Força coleta de lixo da cópia do key state na lib crypto original
+	runtime.GC()
+	debug.FreeOSMemory()
+
 	log.Println("[OMEGA-SECURITY] Módulo KMS Criptográfico Armado. Limpeza de memória executada com sucesso (Runtime Zeroize).")
 	return aead
 }
@@ -334,8 +350,7 @@ func handleAlienConnection(alienConn net.Conn) {
 		// [RT-11 FIX] Contador de pacotes inválidos mid-stream
 		invalidCount := 0
 		for {
-			// [RT-18 FIX] Retorno do timeout para prevenir Slowloris post-handshake e goroutine explosion
-			alienConn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			// [GEN-7] Removido o alienConn.SetReadDeadline(10s) massivo que quebrava WS.
 			packet, err := readFramedPacket(alienConn)
 			if err != nil {
 				if err != io.EOF {

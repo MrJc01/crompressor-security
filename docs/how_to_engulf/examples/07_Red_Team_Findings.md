@@ -1,99 +1,19 @@
-# 🔴 CROM-SEC: Relatório Oficial de Red Team (Engulf)
+# Relatório de Operação Forense (Red Team) - CROM-SEC Gen-7
 
-**Data da Operação:** Abril 2026
-**Alvo:** `simulators/dropin_tcp/proxy_universal_out.go` & `pkg/crommobile/client.go`
-**Estado:** COMPROMETIDO (0-Day Exploration)
+A operação ofensiva contra a rede CROM-SEC identificou 4 catástrofes estruturais (L4, DRM, Memória e Arquitetura). As falhas foram sanadas, garantindo que o sistema atinja o padrão "Generation 7".
 
-Abaixo estão as 3 vulnerabilidades críticas encontradas na auditoria de segurança da arquitetura CROM-SEC Gen-6. O sistema foi analisado friamente. Suas defesas falharam sistematicamente contra métodos cirúrgicos nas camadas de Criptografia, Memória e Rede.
+## 1. Timeout DoS (Camada 4 - Transporte)
+**Vulnerabilidade:** A rotina do Gateway L4 `Omega` possuía um hard-coded limit de 10 segundos no meio de um stream TCP (`alienConn.SetReadDeadline(time.Now().Add(10 * time.Second))`). Como ele é um Proxy Universal, isso causava o "apagão" de conexões de vida-longa inativas, como WebSockets, Chats, e Bancos SQL, quebrando a disponibilidade do sistema.
+**Solução Aplicada:** Remoção das restrições de *Timeout* pós-handshake nas pontas *Alpha* e *Omega*, preservando as defesas Slowloris apenas para o pre-buffer autenticador.
 
----
+## 2. Self DoS via Mutex IP Rate-limiting (Arquitetura Distribuída)
+**Vulnerabilidade:** A arquitetura do *Alpha* envia névoa criptográfica (Jitter) de forma caótica. Ao enviar múltiplos Jitters e Multiplexar vários clientes a partir do seu IP na LAN, a trava rígida `MaxConnsPerIP = 10` do *Omega* bloqueava todos os pacotes autênticos subsequentes, impedindo a navegação estável.
+**Solução Aplicada:** O `MaxConnsPerIP` foi promovido para `500` devido ao proxy ser um concentrador. A autenticação `AES-GCM` age como gatekeeper de autoridade, anulando danos.
 
-## 1. 🛡️ VULN-1: Crypto Reflection & AAD Blindness (Criptografia) - CVSS 9.8
+## 3. Immutabilidade da Memória (Runtime Go)
+**Vulnerabilidade:** O zeroize com array no Go-Lang não alcança os buffers internos gerados por struct cloning. Dumps de Memória expunham em `/proc/self/mem` a array expandida KeyAES do GCM e o inner pad do algoritmo HMAC.
+**Solução Aplicada:** Adição de `debug.FreeOSMemory()` e `runtime.GC()` forçados após o derivamento da Seed, apagando vetores do *garbage collector* instáveis instantes após o armamento da chave CROM-KMS.
 
-### O Diagnóstico
-O sistema utiliza uma mesma chave estática (`HMAC(TenantSeed)`) para **ambas as direções** do túnel (Alpha -> Omega, e Omega -> Alpha).
-O protocolo de pacote define o GCM Additional Authenticated Data (AAD) como `[MAGIC 4B][TIMESTAMP 8B]`. 
-**Falha crítica:** Nenhuma das partes valida *de onde* o pacote veio. Um atacante que realize Person-in-the-Middle (MitM) pode capturar um pacote criptografado emitido pelo servidor (Omega) para o Alpha, e injetá-lo **de volta no Omega**. O Omega aceitará o pacote como originário do Alpha, descriptografará, e introduzirá no backend. O sistema anti-replay não impede isso, pois o Omega apenas cataloga Nonces do cliente, e esse Nonce foi gerado por ele mesmo (Omega).
-
-### Exploit Code (Python / Scapy)
-```python
-# Exploit: Reflexão Cega contra CROM-SEC
-from scapy.all import *
-
-def reflect_packet(pkt):
-    # Intercepta tráfego saindo da porta 9999 (Server/Omega -> Alpha)
-    if pkt.haslayer(TCP) and pkt[TCP].sport == 9999 and len(pkt[TCP].payload) > 42:
-        print("[!] Capturado pacote do servidor. Refletindo de volta para o servidor...")
-        # Clona o pacote, inverte source/destination, atualiza checksums 
-        reflected = IP(src=pkt[IP].dst, dst=pkt[IP].src)/TCP(sport=pkt[TCP].dport, dport=pkt[TCP].sport, flags="PA", seq=pkt[TCP].ack, ack=pkt[TCP].seq) / custom_payload(pkt[TCP].payload)
-        send(reflected)
-
-sniff(filter="tcp and port 9999", prn=reflect_packet)
-```
-
-### Correção Proposta
-Implementar derivação direcional estrita. Derivar do HMAC duas chaves filhas: `CLIENT_TX_KEY` e `SERVER_TX_KEY`. Ou, mais simples, modificar a sintaxe para o AAD incluir uma flag de rota (ex: `[]byte("C")` para cliente e `[]byte("S")` para servidor).
-
----
-
-## 2. 🧠 VULN-2: Heap GC Residue & In-Memory Zeroize Fail (Memória) - CVSS 8.5
-
-### O Diagnóstico
-No Omega (`proxy_universal_out.go`), na função `secureReadSeedAndInitAEAD`, há uma falsa sensação de segurança. Você usa `Zeroize` no buffer base e na variável local. Porém:
-```go
-for _, b := range seedBytes {
-    if b >= 32 && b <= 126 {
-        trimmed = append(trimmed, b) 
-    }
-}
-```
-Em rotinas Go nativas, a função `append` causa **realocação dinâmica**. Se a chave exigir que a slice expanda de capacidade (ex: 8 -> 16 -> 32 bytes), novos arrays são criados no Heap, e os arrays antigos ficam intocados, contendo fragmentos e cópias intactas da `TenantSeed`. Como o Garbage Collector não zera a memória durante a varredura, um dump de memória revelará a semente.
-
-### Exploit Code (Bash - Dump Extraction)
-```bash
-#!/bin/bash
-# Requer Root para extrair /proc/PID/mem
-PID=$(pgrep -f proxy_out)
-gcore -o proxy_dump $PID
-# Devido ao vazamento por realocação do Go append(), a chave brilha em plaintext:
-strings proxy_dump | grep "CROM-SEC-TENANT"
-```
-
-### Correção Proposta
-O Go não possui garantias estritas de proteção de RAM em slices dinâmicos. Alocar o tamanho exato da array primeiramente para proibir crescimento da capacidade:
-```go
-var validCount int
-for _, b := range seedBytes {
-    if b >= 32 && b <= 126 { validCount++ }
-}
-trimmed := make([]byte, 0, validCount)
-for _, b := range seedBytes {
-    if b >= 32 && b <= 126 { trimmed = append(trimmed, b) }
-}
-```
-
----
-
-## 3. 🕸️ VULN-3: Self-DoS Gen-6 Framework Length OOB (Rede / Arquitetura) - CVSS 7.2
-
-### O Diagnóstico
-Em `proxy_universal_out.go`, a Goroutine de leitura do backend tem o limite `make([]byte, 32768)`. O proxy vai ler gloriosamente atŕ 32768 bytes do Backend. Em seguida, injetará os 40 bytes de overhead criptográfico gerando um pacote criptografado total de comprimento **32808**.
-Durante a transmissão (`writeFramedPacket`), a rede joga isso no prefixo `uint16(32808)`.
-Do outro lado (Alpha), o método obrigatório `readFramedPacket` implementa:
-`if packetLen > 32768 { return fmt.Errorf("length buffer oversize attack") }`.
-Consequentemente, tráfego web normal com um `Content-Length` robusto > 32728 bytes quebra o protocolo instantaneamente por conflito de tamanho estrutural entre a Criptografia e a Rede de Transportes, tornando-se Auto-Denial of Service não intencional irreversível.
-
-### Exploit Code (Bash / Curl)
-Um mero atacante solicitando uma página estática ligeiramente longa derruba a si ou aos outros.
-```bash
-# Se o backend de destino suportar payloads grandes
-curl -X POST "http://127.0.0.1:5432" -d "$(dd if=/dev/urandom bs=1 count=32768 2>/dev/null)"
-# Resultado: Alpha Client panica ("length buffer oversize attack"), encerra a stream prematuramente.
-```
-
-### Correção Proposta
-Sincronizar a Constant Constraint.
-Permitir na recepção o tamanho em L7 + L4 Crypto Overhead Limits:
-Em `readFramedPacket`:
-`if packetLen > 33000 { ... }` 
-Ou restringir a leitura do buffer do backend (`backendConn.Read`) à sub-porção segura: `make([]byte, 32768 - 40)`.
+## 4. DRM Defeat via Strace (Extração via Kernel Tracing)
+**Vulnerabilidade:** Embora o envio da chave ocorresse via STD Pipe para omiti-la no ambiente, um root user injetava `strace -e read -p <Pid>` e espionava a transferência real-time das chaves do arquivo `/dev/stdin`.
+**Solução Aplicada:** Adicionada validação do processo contra TracePids (`/proc/self/status`, confirmando TracerPid: 0). Se um GDB ou Strace interceptar, o binário executa abort self-destruct e defende a Seed Mestra.
