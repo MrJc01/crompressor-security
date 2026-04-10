@@ -11,10 +11,11 @@ Este documento é a sua bússola.
 
 Se você é novo no conceito da arquitetura CROM (ou está tentando entender como "engolimos" sistemas inteiros), recomendamos veementemente ler **na ordem exata abaixo**:
 
-1. **[Manual Mestre de Operação Prática](docs/MANUAL_DE_OPERACAO.md)**: Comece por aqui se só quer aprender a instalar cérebros, plugar o dashboard CLI e usar a infraestrutura no dia 1 sem teoria inútil.
-2. **[Relatório de Análise Final (A Teoria Base)](docs/00_REPORT_ANALISE_FINAL.md)**: A introdução filosófica e teórica ao Cérebro e ao Virtual File System (VFS).
-3. **[Guia Master: Drop-In Proxy e Segredos do Englobamento](docs/how_to_engulf/GUIDE_MASTER.md)**: Como, tecnicamente, injetamos a nuvem P2P nativa e bloqueamos o mundo de acessar suas portas expostas.
-4. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo e auditoria de 23 falhas de guerra superadas pela criptografia XOR P2P Orgânica.
+1. **[O GUIA DIDÁTICO CROM (Para Novos Devs)](docs/O_GUIA_DIDATICO_CROM.md)**: Se você não sabe absolutamente nada do que é esse projeto e quer aprender a tecnologia em linguagem coloquial, comece rigorosamente por aqui.
+2. **[Manual Mestre de Operação Prática (SysAdmin)](docs/MANUAL_DE_OPERACAO.md)**: Comece por aqui se só quer aprender a instalar cérebros, plugar o dashboard CLI e usar no dia 1 sem teoria inútil.
+3. **[Relatório de Análise Final (A Teoria Base)](docs/00_REPORT_ANALISE_FINAL.md)**: A introdução filosófica e teórica ao Cérebro e ao Virtual File System (VFS).
+4. **[Guia Master: Drop-In Proxy e Segredos do Englobamento](docs/how_to_engulf/GUIDE_MASTER.md)**: Como, tecnicamente, injetamos a nuvem P2P nativa e bloqueamos o mundo de acessar portas expostas.
+5. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo e auditoria de 23 falhas de guerra superadas pela criptografia XOR P2P Orgânica.
 
 *(Sente-se familiarizado com a teoria acima? Prossiga para os Laboratórios Práticos abaixo.)*
 

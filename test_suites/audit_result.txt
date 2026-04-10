@@ -1,0 +1,341 @@
+==========================================================
+ INICIANDO AUDITORIA CROM-SEC AUTOMATIZADA (20 SCENARIOS)
+ Data: qui 09 abr 2026 23:41:36 -03
+==========================================================
+[*] Compilando Simuladores em Binários Nativos...
+[*] Builds concluídas.
+
+=== ITERANDO 23 SUÍTES COM TIMEOUT DE 20s ===
+ -> [01_routing_nominal] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [02_pentest_mitm] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [03_pentest_dos_cannon] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [04_websocket_chat] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [05_php_fpm_cgi] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [06_python_grpc] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [07_postgres_pgwire] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [08_redis_resp] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [09_iot_mqtt_broker] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [10_cplusplus_raw_tcp] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [11_large_payload_chunking] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [12_high_concurrency] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS (10/10)
+ -> [13_sybil_swarm_attack] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [14_silent_drop_validation] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [15_split_brain_recovery] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [16_nodejs_express_rest] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [17_java_spring_boot_xml] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+FAIL
+ -> [18_dns_hijack_spoofing] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [19_payload_forgery] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+PASS
+ -> [20_vfs_fd_exhaust] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+PASS
+ -> [21_private_brain_system] =================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+ -> [22_onion_multi_hop_route] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY ONION-RELAY (Middle-Brain/Mixnet) ]
+ Roteamento Cego de Camada. Zero Conhecimento Semântico.
+ Escutando: 127.0.0.1:9955 | Repassando: 127.0.0.1:9999
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9955
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9955
+PASS
+ -> [23_jitter_cover_traffic] =================================================================
+  [ Sistema Legado Simulado (PHP/NodeJS) rodando na porta 8080 ] 
+  O sistema está vulnerável caso a porta seja exposta publicamente
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]
+ Resolvendo poeira P2P com validação criptográfica HMAC
+ Escutando nuvem: localhost:9999 | Backend: localhost:8080
+=================================================================
+=================================================================
+ [ CROM ALIEN PROXY IN-FLIGHT (Gen-3 Cloud & Mobile) ]
+ Roteando Sockets crus via GoMobile SDK (LLM + Jitter Cover)
+ Ouvindo porta 127.0.0.1:5432 | Target: 127.0.0.1:9999
+=================================================================
+[GoMobile CROM] Escutando 127.0.0.1:5432 -> Borda P2P 127.0.0.1:9999
+PASS
+
+=== RELATÓRIO MESTRE (/reports/FINAL_AUDIT_REPORT.txt) ===
+================================================================
+ Relatório de Auditoria P2P CROM-SEC
+ Data: qui 09 abr 2026 23:42:38 -03
+ Hostname: jmint
+================================================================
+
+  01_routing_nominal: PASS
+  02_pentest_mitm: PASS (tráfego P2P criptografado, sniffer bloqueado)
+  03_pentest_dos_cannon: PASS (backend vivo, zero leaks)
+  04_websocket_chat: PASS (echo bidirecional funcionou)
+  05_php_fpm_cgi: PASS (PHP engolido com sucesso)
+  06_python_grpc: PASS (protobuf binary engolido)
+  07_postgres_pgwire: PASS (handshake PGWire transitou via proxy)
+  08_redis_resp: PASS (RESP PONG via proxy criptografado)
+  09_iot_mqtt_broker: PASS (CONNACK recebido via tunnel)
+  10_cplusplus_raw_tcp: PASS (binary struct transitou intacta)
+  11_large_payload_chunking: PASS (GOT_10240_BYTES)
+  12_high_concurrency: PASS (10/10 OK)
+  13_sybil_swarm_attack: PASS (backend sobreviveu)
+  14_silent_drop_validation: PASS (zero leaks, silent drop)
+  15_split_brain_recovery: PASS (graceful degradation confirmada)
+  16_nodejs_express_rest: PASS
+  17_java_spring_boot_xml: FAIL
+  18_dns_hijack_spoofing: PASS (redirect bloqueado)
+  19_payload_forgery: PASS (forged payload dropped silently)
+  20_vfs_fd_exhaust: PASS (sobreviveu a 200 FDs abertos)
+  21_private_brain_system: PASS (acesso autorizado OK, hacker bloqueado)
+  22_onion_multi_hop_route: PASS (Atravessou Onion Route impecável)
+  23_jitter_cover_traffic: PASS (Névoa não atrapalhou o fluxo semântico)
+
+================================================================
+ RESUMO EXECUTIVO
+================================================================
+  Total de Suítes:     23
+  APROVADAS (PASS):    22
+  REPROVADAS (FAIL):   1
+  TIMEOUT:             0
+  EM DESENVOLVIMENTO:  0
+  NÃO IMPLEMENTADAS:   0
+================================================================
+
+Auditoria CROM-SEC finalizada. Relatório salvo.
