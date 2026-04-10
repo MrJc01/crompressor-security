@@ -1,0 +1,29 @@
+# Binários da automação em Ahead-Of-Time (Test Runners)
+test_suites/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Relatórios em constante mudança dos laboratórios de Pentest
+test_suites/reports/*.log
+test_suites/reports/*.txt
+
+# Logs flutuantes dos simuladores
+simulators/**/*.log
+test_suites/**/*.log
+
+# Temporary / TempFS (Usado no buffer dos simuladores L4/L7)
+*.crom
+*.sock
+*.alien
+/tmp/
+
+# Go compilados no lab
+vendor/
+go.sum
+
+# OS
+.DS_Store
+Thumbs.db
