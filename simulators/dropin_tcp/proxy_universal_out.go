@@ -39,10 +39,10 @@ const (
 	MaxTimestampDriftSecs = 5
 
 	// [GEN-6 RT-08 FIX / GEN-7] Aumentado massivamente para suportar Jitter Burst.
-	MaxConnsPerIP = 500
+	MaxConnsPerIP = 8000
 
 	// [GEN-8 RT-202 FIX] Limite máximo de entradas no nonce cache para prevenir OOM.
-	MaxNonceCacheEntries = 100000
+	MaxNonceCacheEntries = 5000000
 
 	// [GEN-8 RT-204 FIX] Idle timeout para mid-stream reads (segundos).
 	// Previne goroutine exhaustion via slow-feed após handshake.
@@ -195,12 +195,12 @@ func getAEAD() cipher.AEAD {
 		// [GEN-8 RT-202 FIX] Janitor com TTL granular + limite de entradas.
 		go func() {
 			for {
-				time.Sleep(10 * time.Second)
+				time.Sleep(2 * time.Second)
 				now := time.Now().Unix()
 				var cleaned int64
 				globalNonceCache.Range(func(key, value interface{}) bool {
 					if ts, ok := value.(int64); ok {
-						if now-ts > 60 {
+						if now-ts > 5 {
 							globalNonceCache.Delete(key)
 							cleaned++
 						}
@@ -404,15 +404,13 @@ func handleAlienConnection(alienConn net.Conn) {
 	}
 
 	if isJitt {
-		// Cover-Traffic cego P2P. Absorve a conexao sem mandar pro backend e encerra.
-		log.Printf("[OMEGA] JITTER Cover-Traffic Inicial Recebido (%d bytes). Absorvido.", n)
-		return
+		log.Printf("[OMEGA] JITTER Cover-Traffic Inicial Recebido (%d bytes). Conexão L4 mantida aberta.", n)
+	} else {
+		// [RT-10 FIX] Hash do endereço
+		log.Printf("[OMEGA] Pacote CROM válido de %s (%d bytes)", hashAddr(alienConn.RemoteAddr()), len(plaintext))
 	}
 
-	// [RT-10 FIX] Hash do endereço
-	log.Printf("[OMEGA] Pacote CROM válido de %s (%d bytes)", hashAddr(alienConn.RemoteAddr()), len(plaintext))
-
-	// Conectar ao backend real
+	// Conectar ao backend real independentemente (se for JITT, esperamos próximo pacote HTTP real)
 	backendConn, err := net.Dial("tcp", BackendRealHost)
 	if err != nil {
 		log.Printf("[OMEGA] Backend indisponível: %v", err)
@@ -420,7 +418,9 @@ func handleAlienConnection(alienConn net.Conn) {
 	}
 	defer backendConn.Close()
 
-	backendConn.Write(plaintext)
+	if !isJitt {
+		backendConn.Write(plaintext)
+	}
 
 	var wg sync.WaitGroup
 

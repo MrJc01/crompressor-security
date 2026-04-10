@@ -31,7 +31,7 @@ const (
 	MaxTimestampDriftSecs = 5
 
 	// [GEN-8 RT-202 FIX] Limite máximo de entradas no nonce cache para prevenir OOM.
-	MaxNonceCacheEntries = 100000
+	MaxNonceCacheEntries = 5000000
 
 	// [GEN-8 RT-204 FIX] Idle timeout para mid-stream reads (segundos).
 	MidStreamIdleTimeoutSecs = 120
@@ -197,12 +197,12 @@ func getAEAD() cipher.AEAD {
 		// [GEN-8 RT-202 FIX] Janitor com TTL granular + limite de entradas.
 		go func() {
 			for {
-				time.Sleep(10 * time.Second)
+				time.Sleep(2 * time.Second)
 				now := time.Now().Unix()
 				var cleaned int64
 				globalNonceCache.Range(func(key, value interface{}) bool {
 					if ts, ok := value.(int64); ok {
-						if now-ts > 60 {
+						if now-ts > 5 {
 							globalNonceCache.Delete(key)
 							cleaned++
 						}
