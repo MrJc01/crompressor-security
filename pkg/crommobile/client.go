@@ -1,6 +1,7 @@
 package crommobile
 
 import (
+	"bufio"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -11,9 +12,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	mrand "math/rand"
 	"net"
 	"os"
-
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +23,9 @@ import (
 const (
 	CromMagic   = "CROM"
 	JitterMagic = "JITT"
+
+	// [GEN-6 RT-06 FIX] Janela de drift máximo do timestamp autenticado (segundos)
+	MaxTimestampDriftSecs = 5
 )
 
 // [RT-06 FIX] Seed agora é unexported — nenhum package externo pode lê-la diretamente.
@@ -36,10 +41,26 @@ var seedOnce sync.Once
 func GetTenantSeed() string {
 	seedOnce.Do(func() {
 		if globalTenantSeed == "" {
+			// [GEN-6 RT-02] Prioridade 1: Ler seed via STDIN pipe
+			stat, _ := os.Stdin.Stat()
+			if (stat.Mode() & os.ModeCharDevice) == 0 {
+				scanner := bufio.NewScanner(os.Stdin)
+				if scanner.Scan() {
+					stdinSeed := strings.TrimSpace(scanner.Text())
+					if stdinSeed != "" {
+						globalTenantSeed = stdinSeed
+						log.Println("[ALPHA-SECURITY] Seed carregada via STDIN pipe (segura — sem /proc/environ leak).")
+						return
+					}
+				}
+			}
+
+			// [GEN-6 RT-02] Prioridade 2: Fallback para env var
 			envSeed := os.Getenv("CROM_TENANT_SEED")
 			if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
 				globalTenantSeed = envSeed
 				log.Println("[ALPHA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+				log.Println("[ALPHA-SECURITY] ⚠️  AVISO: Env vars ficam em /proc/PID/environ. Prefira STDIN pipe.")
 			} else if envSeed == "WIPED_BY_SEC_POLICY" || globalTenantSeed == "WIPED_BY_SEC_POLICY" {
 				// Segura
 			} else {
@@ -117,13 +138,13 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 	return packetBuf, nil
 }
 
+// [GEN-6 RT-05 FIX] Atomic write: combina length + payload em um único buffer
+// para eliminar risco de interleaving em cenários de concurrent write.
 func writeFramedPacket(conn net.Conn, packet []byte) error {
-	lenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lenBuf, uint16(len(packet)))
-	if _, err := conn.Write(lenBuf); err != nil {
-		return err
-	}
-	_, err := conn.Write(packet)
+	frame := make([]byte, 2+len(packet))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(packet)))
+	copy(frame[2:], packet)
+	_, err := conn.Write(frame)
 	return err
 }
 
@@ -196,7 +217,7 @@ func cromDecryptPacket(packet []byte) []byte {
 	if drift < 0 {
 		drift = -drift
 	}
-	if drift > 30 {
+	if drift > MaxTimestampDriftSecs {
 		log.Printf("[ALPHA-SECURITY] Pacote expirado (drift=%ds). Replay Window bloqueado.", drift)
 		return nil
 	}
@@ -239,10 +260,12 @@ func startJitterCoverTraffic(ctx context.Context, swarmAddr string) {
 		case <-ctx.Done():
 			// Conexão encerrada — parar a névoa criptográfica
 			return
-		case <-time.After(300 * time.Millisecond):
+		// [GEN-6 RT-10 FIX] Jitter anti-fingerprinting: tempo aleatório entre 100ms e 500ms
+		case <-time.After(time.Duration(100+mrand.Intn(400)) * time.Millisecond):
 			conn, err := net.DialTimeout("tcp", swarmAddr, 500*time.Millisecond)
 			if err == nil {
-				fakeData := make([]byte, 64)
+				// [GEN-6 RT-10 FIX] Tamanho aleatório entre 32 e 2048 bytes
+				fakeData := make([]byte, 32+mrand.Intn(2016))
 				// [RT-09 FIX] Checar erro do rand no jitter também
 				if _, randErr := io.ReadFull(rand.Reader, fakeData); randErr != nil {
 					conn.Close()

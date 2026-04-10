@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -10,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	mrand "math/rand"
 	"net"
 	"os"
-
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,18 +31,46 @@ const (
 
 	// [RT-11 FIX] Máximo de pacotes inválidos mid-stream antes de encerrar conexão
 	MaxInvalidMidStream = 5
+
+	// [GEN-6 RT-06 FIX] Janela de drift máximo do timestamp autenticado (segundos).
+	// Reduzido de 30s para 5s para minimizar janela de replay.
+	MaxTimestampDriftSecs = 5
+
+	// [GEN-6 RT-08 FIX] Máximo de conexões simultâneas por IP de origem.
+	MaxConnsPerIP = 10
 )
 
 // [RT-01 FIX] TenantSeed carregada de variável de ambiente em vez de hardcoded.
-// Se CROM_TENANT_SEED não estiver definida, usa fallback legado (com warning).
+// [GEN-6 RT-02 FIX] Prioridade: 1) STDIN pipe, 2) env var, 3) abort.
+// STDIN pipe NÃO expõe a seed em /proc/PID/environ (eliminando VULN-1 POSIX).
 var tenantSeed string
+
+// [GEN-6 RT-08 FIX] Mapa atômico de contagem de conexões por IP.
+var perIPConns sync.Map // map[string]*int32
 
 func getTenantSeed() string {
 	if tenantSeed == "" {
+		// [GEN-6 RT-02] Prioridade 1: Ler seed via STDIN pipe (mais seguro)
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			// STDIN é um pipe, não terminal interativo
+			scanner := bufio.NewScanner(os.Stdin)
+			if scanner.Scan() {
+				stdinSeed := strings.TrimSpace(scanner.Text())
+				if stdinSeed != "" {
+					tenantSeed = stdinSeed
+					log.Println("[OMEGA-SECURITY] Seed carregada via STDIN pipe (segura — sem /proc/environ leak).")
+					return tenantSeed
+				}
+			}
+		}
+
+		// [GEN-6 RT-02] Prioridade 2: Fallback para env var (compatibilidade)
 		envSeed := os.Getenv("CROM_TENANT_SEED")
 		if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
 			tenantSeed = envSeed
 			log.Println("[OMEGA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+			log.Println("[OMEGA-SECURITY] ⚠️  AVISO: Env vars ficam em /proc/PID/environ. Prefira STDIN pipe.")
 		} else if envSeed == "WIPED_BY_SEC_POLICY" || tenantSeed == "WIPED_BY_SEC_POLICY" {
 			// Vazio / memory secure
 		} else {
@@ -114,13 +145,13 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 	return packetBuf, nil
 }
 
+// [GEN-6 RT-05 FIX] Atomic write: combina length + payload em um único buffer
+// para eliminar risco de interleaving em cenários de concurrent write.
 func writeFramedPacket(conn net.Conn, packet []byte) error {
-	lenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lenBuf, uint16(len(packet)))
-	if _, err := conn.Write(lenBuf); err != nil {
-		return err
-	}
-	_, err := conn.Write(packet)
+	frame := make([]byte, 2+len(packet))
+	binary.BigEndian.PutUint16(frame[:2], uint16(len(packet)))
+	copy(frame[2:], packet)
+	_, err := conn.Write(frame)
 	return err
 }
 
@@ -163,7 +194,7 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	if drift < 0 {
 		drift = -drift
 	}
-	if drift > 30 {
+	if drift > MaxTimestampDriftSecs {
 		log.Printf("[OMEGA-SECURITY] Pacote expirado (drift=%ds). Replay Window bloqueado.", drift)
 		return nil, false
 	}
@@ -354,14 +385,45 @@ func handleAlienConnection(alienConn net.Conn) {
 	wg.Wait()
 }
 
+// [GEN-6 RT-08 FIX] Helpers para tracking per-IP.
+func incrementIPConn(addr string) bool {
+	val, _ := perIPConns.LoadOrStore(addr, new(int32))
+	counter := val.(*int32)
+	if atomic.AddInt32(counter, 1) > MaxConnsPerIP {
+		atomic.AddInt32(counter, -1)
+		return false
+	}
+	return true
+}
+
+func decrementIPConn(addr string) {
+	if val, ok := perIPConns.Load(addr); ok {
+		counter := val.(*int32)
+		if atomic.AddInt32(counter, -1) <= 0 {
+			perIPConns.Delete(addr)
+		}
+	}
+}
+
+func extractIP(addr net.Addr) string {
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return host
+}
+
 func main() {
+	// Seed do PRNG para jitter anti-fingerprint
+	mrand.Seed(time.Now().UnixNano())
+
 	// [RT-01 FIX] Cache do cipher AES e limpeza automática
 	_ = getAEAD()
 
+	// [GEN-6 RT-11 FIX] Banner sanitizado — sem revelar mecanismos de segurança.
 	fmt.Println("=================================================================")
-	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (v3 Hardened + Silent Drop) ]")
-	fmt.Println(" AES-256-GCM | Anti-Ptrace | Max-Conn Limiter | IP Hashing")
-	fmt.Println(" Escutando nuvem: localhost:9999 | Backend: localhost:8080")
+	fmt.Println(" [ CROM PROXY OMEGA (Gen-6 Hardened) ]")
+	fmt.Printf("  Escutando: %s | Backend: %s\n", SwarmListenAddr, BackendRealHost)
 	fmt.Println("=================================================================")
 
 	l, err := net.Listen("tcp", SwarmListenAddr)
@@ -378,15 +440,26 @@ func main() {
 			continue
 		}
 
+		// [GEN-6 RT-08 FIX] Per-IP connection limiting
+		clientIP := extractIP(conn.RemoteAddr())
+		if !incrementIPConn(clientIP) {
+			conn.Close()
+			continue
+		}
+
 		// [RT-13 FIX] Tentar adquirir slot. Se no limite, rejeitar silenciosamente.
 		select {
 		case connSemaphore <- struct{}{}:
 			go func() {
-				defer func() { <-connSemaphore }()
+				defer func() {
+					<-connSemaphore
+					decrementIPConn(clientIP)
+				}()
 				handleAlienConnection(conn)
 			}()
 		default:
 			// Limite de conexões atingido — silent drop
+			decrementIPConn(clientIP)
 			conn.Close()
 		}
 	}
