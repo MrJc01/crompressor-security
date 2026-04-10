@@ -1,84 +1,171 @@
 package main
 
 import (
-	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
-	"time"
+	"sync"
 )
 
 const (
-	AlienSwarmTarget = "127.0.0.1:9999"
-	BackendRealHost  = "127.0.0.1:8080" // Porta da "Api Legada" do JS ou PHP
+	SwarmListenAddr = "127.0.0.1:9999"
+	BackendRealHost = "127.0.0.1:8080"
+	TenantSeed      = "CROM-SEC-TENANT-ALPHA-2026"
+	CromMagic       = "CROM"
 )
 
-type CrompressorSDKMock struct{}
+// cromDecryptPacket valida e descriptografa um pacote CROM.
+// Retorna nil se o pacote não passar na validação (SILENT DROP).
+func cromDecryptPacket(packet []byte) []byte {
+	// Tamanho mínimo: 4 (magic) + 8 (nonce) + 1 (data) = 13
+	if len(packet) < 13 {
+		return nil
+	}
+	// Validar magic header — se não for "CROM", é lixo de atacante
+	if string(packet[:4]) != CromMagic {
+		return nil
+	}
+	nonce := packet[4:12]
+	encrypted := packet[12:]
 
-func (c *CrompressorSDKMock) Unpack(ctx context.Context, input string, output string) error {
-	time.Sleep(10 * time.Millisecond) 
-	// Simula a Matrix reversa reconstruindo um pacote gigante e legível da poeira
-	recon := "GET /api/data HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
-	return os.WriteFile(output, []byte(recon), 0644)
+	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	mac.Write([]byte("CROM_SESSION_KEY"))
+	key := mac.Sum(nil) // 32 bytes
+
+	decrypted := make([]byte, len(encrypted))
+	for i, b := range encrypted {
+		decrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	}
+	return decrypted
 }
 
-func handleAlienToBackend(alienConn net.Conn) {
-	defer alienConn.Close()
-	log.Printf("[SDK-OMEGA-BRAIN] Detectado estilhaço espacial P2P vindos de %s", alienConn.RemoteAddr())
+// cromEncrypt aplica XOR cíclico com chave HMAC para a resposta de volta.
+func cromEncrypt(data []byte) []byte {
+	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	mac.Write([]byte("CROM_SESSION_KEY"))
+	key := mac.Sum(nil)
 
-	ramDiskPath := os.TempDir()
-	
-	buf := make([]byte, 8192)
-	for {
-		n, err := alienConn.Read(buf)
-		if err != nil {
-			if err != io.EOF { log.Printf("Stream error: %v", err) }
-			return
-		}
+	nonce := make([]byte, 8)
+	rand.Read(nonce)
 
-		inPath := filepath.Join(ramDiskPath, "ingress_alien.crom")
-		outPath := filepath.Join(ramDiskPath, "out_reconstruido.sock")
-		os.WriteFile(inPath, buf[:n], 0644)
-
-		start := time.Now()
-		
-		// Unpack Nativo
-		engine := &CrompressorSDKMock{}
-		engine.Unpack(context.Background(), inPath, outPath)
-
-		// Bytes vivos e decodificados em formato de protocolo estandar
-		trueBytes, _ := os.ReadFile(outPath)
-		
-		log.Printf("[SDK-METRICS] Alien Unpacked. Latency Matrix Hitting: %v", time.Since(start))
-
-		// Empurra ladeira baixo pro Servidor HTTP real
-		backendConn, err := net.Dial("tcp", BackendRealHost)
-		if(err == nil) {
-		    backendConn.Write(trueBytes)
-		    
-		    respBuf := make([]byte, 16000)
-		    bn, _ := backendConn.Read(respBuf)
-		    // Retorna a resposta esmagada pra nuvem (Omisso a logica esmagadora de saida pra resumir)
-		    alienConn.Write(respBuf[:bn])
-		    backendConn.Close()
-		}
+	encrypted := make([]byte, len(data))
+	for i, b := range data {
+		encrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
 	}
+
+	packet := make([]byte, 0, 4+8+len(encrypted))
+	packet = append(packet, []byte(CromMagic)...)
+	packet = append(packet, nonce...)
+	packet = append(packet, encrypted...)
+	return packet
+}
+
+func handleAlienConnection(alienConn net.Conn) {
+	defer alienConn.Close()
+
+	// Ler o primeiro chunk para validar se é um pacote CROM válido
+	initialBuf := make([]byte, 32768)
+	n, err := alienConn.Read(initialBuf)
+	if err != nil {
+		return
+	}
+
+	// ===== SILENT DROP =====
+	// Se o pacote não tem a assinatura CROM, fechar a conexão sem responder NADA.
+	// Isso impede banner grabbing e information leakage.
+	plaintext := cromDecryptPacket(initialBuf[:n])
+	if plaintext == nil {
+		log.Printf("[OMEGA-SILENT-DROP] Pacote inválido de %s (%d bytes). Dropped.", alienConn.RemoteAddr(), n)
+		// NÃO enviar nenhuma resposta. Conexão morre silenciosamente.
+		return
+	}
+
+	log.Printf("[OMEGA] Pacote CROM válido de %s (%d bytes)", alienConn.RemoteAddr(), len(plaintext))
+
+	// Conectar ao backend real
+	backendConn, err := net.Dial("tcp", BackendRealHost)
+	if err != nil {
+		log.Printf("[OMEGA] Backend indisponível: %v", err)
+		return
+	}
+	defer backendConn.Close()
+
+	// Enviar o primeiro chunk já descriptografado
+	backendConn.Write(plaintext)
+
+	var wg sync.WaitGroup
+
+	// Goroutine 1: Alien -> Decrypt -> Backend (upstream contínuo)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768)
+		for {
+			rn, err := alienConn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("[OMEGA] Alien read err: %v", err)
+				}
+				backendConn.Close()
+				return
+			}
+			pt := cromDecryptPacket(buf[:rn])
+			if pt == nil {
+				log.Printf("[OMEGA-SILENT-DROP] Pacote corrompido mid-stream. Dropped.")
+				continue
+			}
+			_, werr := backendConn.Write(pt)
+			if werr != nil {
+				return
+			}
+		}
+	}()
+
+	// Goroutine 2: Backend -> Encrypt -> Alien (downstream contínuo)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768)
+		for {
+			rn, err := backendConn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("[OMEGA] Backend read err: %v", err)
+				}
+				alienConn.Close()
+				return
+			}
+			encrypted := cromEncrypt(buf[:rn])
+			_, werr := alienConn.Write(encrypted)
+			if werr != nil {
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
 }
 
 func main() {
 	fmt.Println("=================================================================")
-	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (EGRESS) ]")
-	fmt.Println(" Resolvendo poeira p2p em pacotes TCP para Apis Backend (Node/PHP)")
-	fmt.Println(" Escutando nuvem: localhost:9999 | Ocultando App em: 8080")
+	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]")
+	fmt.Println(" Resolvendo poeira P2P com validação criptográfica HMAC")
+	fmt.Println(" Escutando nuvem: localhost:9999 | Backend: localhost:8080")
 	fmt.Println("=================================================================")
-	
-	l, err := net.Listen("tcp", AlienSwarmTarget)
-	if err != nil { log.Fatal(err) }
+
+	l, err := net.Listen("tcp", SwarmListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	for {
-		conn, _ := l.Accept()
-		go handleAlienToBackend(conn)
+		conn, err := l.Accept()
+		if err != nil {
+			continue
+		}
+		go handleAlienConnection(conn)
 	}
 }

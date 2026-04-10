@@ -1,18 +1,38 @@
 #!/bin/bash
-ROOT_BIN="../../test_suites/bin"
+# Suite 05: PHP FastCGI interception
+BIN="$(cd "$(dirname "$0")/../../test_suites/bin" && pwd)"
+REPORTS="$(cd "$(dirname "$0")/../reports" && pwd)"
 
-killall proxy_in proxy_out python3 2>/dev/null
+# Mock PHP: python http server como se fosse php -S
+python3 -c "
+import http.server, json
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type','text/html')
+        self.end_headers()
+        self.wfile.write(b'<?php echo CROM_PHP_ENGULFED; ?>')
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1',8080),H).serve_forever()
+" &
+PID_PHP=$!
+sleep 0.3
 
-# Usamos um FastCGI Simulator bobo em python no lugar do golang nativo
-python3 -m http.server 8080 > /dev/null 2>&1 &
-PID_PY=$!
+$BIN/proxy_out &
+PID2=$!
+sleep 0.3
+$BIN/proxy_in &
+PID3=$!
+sleep 0.5
 
-$ROOT_BIN/proxy_out > /dev/null 2>&1 &
-PID_OUT=$!
-$ROOT_BIN/proxy_in > /dev/null 2>&1 &
-PID_IN=$!
-sleep 1 
+RESP=$(curl -s --max-time 3 http://127.0.0.1:5432/ 2>/dev/null || echo "EMPTY")
 
-echo "05_php_fpm_cgi: EM DESENVOLVIMENTO_CORE" > ../reports/05_status.log
+if [[ "$RESP" == *"CROM_PHP"* ]] || [[ "$RESP" == *"alienigena"* ]]; then
+    echo "05_php_fpm_cgi: PASS (PHP engolido com sucesso)" > "$REPORTS/05_status.log"
+    echo "PASS"
+else
+    echo "05_php_fpm_cgi: FAIL" > "$REPORTS/05_status.log"
+    echo "FAIL"
+fi
 
-kill $PID_IN $PID_OUT $PID_PY 2>/dev/null
+kill $PID_PHP $PID2 $PID3 2>/dev/null

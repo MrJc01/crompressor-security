@@ -31,3 +31,6 @@ Os simuladores na trincheira `crompressor-security` atestaram o comportamento do
     *   **Prática:** Nós metralhamos as portas Swarm com pacotes pesados forjados com "Magic Bytes" de um invasor querendo desestabilizar o App Original escondido atrás do Cérebro.
     *   **Resultado:** A porta P2P engoliu tudo, mas algo vital foi detectado pelo Bash Test: Os *Erros de Sintaxe Incorretos* do Node/PHP foram devolvidos para trás no duto ao invés do protocolo desligá-los. Essa falha de roteamento expôs o erro `HTTP 400` permitindo que o invasor inferisse "Opa, tem um site Web aí atrás". 
     *   **A Evolução:** Essa captura é Exuberante! Provou que a máquina precisa aplicar um **"SILENT DROP"** estrito na sua classe `internal/network/swarm.go`. Se um pacote não descifrar perfeitamente validado no Hash do Merkle Node original, a conexão TCP corta de seco (`EOF`), o invasor nunca recebe retorno nenhum. 
+
+---
+**[🧭 Voltar ao Índice Principal](../INDICE.md)**

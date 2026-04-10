@@ -22,3 +22,6 @@ O _Cérebro Cliente B_ vai extrair o Hash do XOR Delta. Quando ele procurar esse
 Isso acarreta Zero Significado Semântico sem que haja a complexidade processual clássica de re-cifrar massivamente bytes por cima bytes todo segundo via chaves longas e pesadas.
 
 O Cérebro Mutado lê um pacote que só ele mesmo ou outro Cérebro Clone (com a exata Seed de mutação) consegue ler e falar. Isso assegura isolação neural impenetrável transversal.
+
+---
+**[🧭 Voltar ao Índice Principal](../INDICE.md)**

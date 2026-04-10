@@ -26,3 +26,6 @@ Um sistema Drop-In, na prática de conectividade moderna orientada ao "Zero Trus
 
 > [!TIP]
 > A latência induzida pela compressão semântica (se feita com tensores nativos no CROM-WASM) tipicamente "paga" o seu tempo e velocidade, visto que mandaremos pacotes TCP muito menores pela internet pública, mitigando a saturação global e gargalos de Backhaul (link).
+
+---
+**[🧭 Voltar ao Índice Principal](../INDICE.md)**

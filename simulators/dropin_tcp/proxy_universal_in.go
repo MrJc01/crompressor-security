@@ -1,93 +1,157 @@
 package main
 
 import (
-	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
-	"time"
-
-	// Importando da engine original (Excluido do go.mod local por ser PoC)
-	// "github.com/MrJc01/crompressor/pkg/sdk"
+	"sync"
 )
 
 const (
 	AlienSwarmTarget = "127.0.0.1:9999"
-	ListeningPort    = "127.0.0.1:5432" // Porta drop-in 
+	ListeningPort    = "127.0.0.1:5432"
+	// Seed secreta compartilhada entre Alpha e Omega (por inquilino)
+	TenantSeed = "CROM-SEC-TENANT-ALPHA-2026"
+	// Prefixo mágico para identificar pacotes CROM válidos
+	CromMagic = "CROM"
 )
 
-// CrompressorSDKMock simula a interface do SDK real baseada no arquivo pkg/sdk/api.go auditoado
-type CrompressorSDKMock struct{}
+// cromEncrypt aplica XOR cíclico com chave derivada do HMAC da seed do tenant.
+// Isso garante que o tráfego no canal P2P seja entropia pura.
+func cromEncrypt(data []byte) []byte {
+	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	mac.Write([]byte("CROM_SESSION_KEY"))
+	key := mac.Sum(nil) // 32 bytes de chave derivada
 
-func (c *CrompressorSDKMock) Pack(ctx context.Context, input string, output string) error {
-	time.Sleep(15 * time.Millisecond) // Simula engine neural processando chunk (O(1))
-	// Simula a compressão jogando lixo alienígena no arquivo de output e diminuindo o tamanho
-	data, _ := os.ReadFile(input)
-	compressed := fmt.Sprintf("XOR_ALIEN_CROM:[LEN=>%d]", len(data))
-	return os.WriteFile(output, []byte(compressed), 0644)
+	// Gerar 8 bytes de nonce aleatório (anti-replay)
+	nonce := make([]byte, 8)
+	rand.Read(nonce)
+
+	// XOR cíclico com a chave
+	encrypted := make([]byte, len(data))
+	for i, b := range data {
+		encrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	}
+
+	// Formato do pacote: [4 magic][8 nonce][N encrypted_data]
+	packet := make([]byte, 0, 4+8+len(encrypted))
+	packet = append(packet, []byte(CromMagic)...)
+	packet = append(packet, nonce...)
+	packet = append(packet, encrypted...)
+	return packet
 }
 
-func handleTCPStreamToSDK(clientConn net.Conn) {
+func handleClient(clientConn net.Conn) {
 	defer clientConn.Close()
-	log.Printf("[SDK-ALPHA-BRAIN] Sequestrando conexão cliente de %s", clientConn.RemoteAddr())
+	log.Printf("[ALPHA] Conexão de %s", clientConn.RemoteAddr())
 
-	// Truque SRE: Se o Crompressor SDK espera HD, usamos TempFS Mount (Na memória RAM /dev/shm)
-	// Evita latência de 14ms num SSD e vira 0.01ms na memoria DIMM
-	ramDiskPath := os.TempDir()
-	
-	buf := make([]byte, 8192) // Lendo o máximo do stream
-	for {
-		n, err := clientConn.Read(buf)
-		if err != nil {
-			if err != io.EOF { log.Printf("Stream error: %v", err) }
-			return
-		}
-
-		// 1. Grava no disco de RAM temporário
-		inPath := filepath.Join(ramDiskPath, "ingress_chunk.crom")
-		outPath := filepath.Join(ramDiskPath, "out_chunk.alien")
-		os.WriteFile(inPath, buf[:n], 0644)
-
-		start := time.Now()
-		
-		// 2. Invoca o Monstro Native do Crompressor SDK
-		engine := &CrompressorSDKMock{}
-		engine.Pack(context.Background(), inPath, outPath)
-
-		// 3. Lê o lixo esmagado e injeta na MixNet TCP (Swarm Network)
-		alienBytes, _ := os.ReadFile(outPath)
-		
-		log.Printf("[SDK-METRICS] Original: %d bytes | Comprimido/Mutado: %d bytes | Latency: %v", 
-			n, len(alienBytes), time.Since(start))
-
-		// Dispara na nuvem p2p (Omitindo handling do dial pra focar no SDK flow)
-		swarmConn, _ := net.Dial("tcp", AlienSwarmTarget)
-		swarmConn.Write(alienBytes)
-		
-		// Ler resposta alien:
-		respBuf := make([]byte, 8192)
-		_, _ = swarmConn.Read(respBuf)
-		
-		// Unpack Reverso (Mock do Proxy In para receber as respostas da DB)
-		clientConn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n Resposta alienigena simulada devolta"))
-		swarmConn.Close()
+	// Estabelecer conexão persistente com o Swarm (full-duplex)
+	swarmConn, err := net.Dial("tcp", AlienSwarmTarget)
+	if err != nil {
+		log.Printf("[ALPHA] Swarm indisponível: %v", err)
+		return
 	}
+	defer swarmConn.Close()
+
+	var wg sync.WaitGroup
+
+	// Goroutine 1: Client -> Encrypt -> Swarm (upstream)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768) // 32KB buffer (suporta payloads grandes)
+		for {
+			n, err := clientConn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("[ALPHA] Client read err: %v", err)
+				}
+				swarmConn.Close() // Sinaliza pro outro lado
+				return
+			}
+			encrypted := cromEncrypt(buf[:n])
+			_, werr := swarmConn.Write(encrypted)
+			if werr != nil {
+				return
+			}
+		}
+	}()
+
+	// Goroutine 2: Swarm -> Decrypt -> Client (downstream)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 32768)
+		for {
+			n, err := swarmConn.Read(buf)
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("[ALPHA] Swarm read err: %v", err)
+				}
+				clientConn.Close()
+				return
+			}
+			// Os dados de volta do Omega já vêm criptografados com CROM header.
+			// Precisamos descriptografar antes de devolver ao cliente.
+			plaintext := cromDecryptPacket(buf[:n])
+			if plaintext == nil {
+				log.Printf("[ALPHA] Resposta inválida do Swarm (dropped)")
+				continue
+			}
+			_, werr := clientConn.Write(plaintext)
+			if werr != nil {
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+// cromDecryptPacket extrai e descriptografa um pacote CROM.
+func cromDecryptPacket(packet []byte) []byte {
+	// Validar tamanho mínimo: 4 (magic) + 8 (nonce) + 1 (data)
+	if len(packet) < 13 {
+		return nil
+	}
+	// Validar magic header
+	if string(packet[:4]) != CromMagic {
+		return nil
+	}
+	nonce := packet[4:12]
+	encrypted := packet[12:]
+
+	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	mac.Write([]byte("CROM_SESSION_KEY"))
+	key := mac.Sum(nil)
+
+	decrypted := make([]byte, len(encrypted))
+	for i, b := range encrypted {
+		decrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	}
+	return decrypted
 }
 
 func main() {
 	fmt.Println("=================================================================")
-	fmt.Println(" [ CROM ALIEN PROXY IN-FLIGHT ]")
-	fmt.Println(" Roteando Sockets crus on-the-fly usando TempFS + SDK nativo")
+	fmt.Println(" [ CROM ALIEN PROXY IN-FLIGHT (v2 Full-Duplex + Crypto) ]")
+	fmt.Println(" Roteando Sockets crus on-the-fly com XOR+HMAC")
 	fmt.Println(" Ouvindo na porta localhost:5432")
 	fmt.Println("=================================================================")
-	
+
 	l, err := net.Listen("tcp", ListeningPort)
-	if err != nil { log.Fatal(err) }
+	if err != nil {
+		log.Fatal(err)
+	}
 	for {
-		conn, _ := l.Accept()
-		go handleTCPStreamToSDK(conn)
+		conn, err := l.Accept()
+		if err != nil {
+			continue
+		}
+		go handleClient(conn)
 	}
 }

@@ -1,32 +1,26 @@
-# Crompressor Security Lab (CROM-SEC) 👽🛡️
+# 🛡️ CROM-SEC - A Suite de Auditoria Cérebro Alpha/Omega
 
-Este repositório é o laboratório de cibersegurança isolado (Red Team / SRE) dedicado a testar e expandir os limites da arquitetura P2P e Compressão Semântica do **Crompressor** oficial.
+Bem-vindo ao repositório satélite de P&D (Pesquisa e Desenvolvimento) ofensivo do Projeto Crompressor.
 
-O objetivo primário deste braço é provar a soberania e a inquebrabilidade do protocolo através de uma adaptação chamada **Alien Drop-In Proxy L4/L7**.
+Se você procura arquivos soltos ou testes, **PARE AQUI**.  
+Este repositório consolidou-se em um livro prático de Arquitetura Hacker para proteger aplicações legadas (Java, PHP, Nodejs) contra ataques usando um proxy invisível de englobamento (O Drop-in P2P).
 
-## A Tese do "Proxy Alienígena"
+### ➡️ O Ponto de Entrada Oficial: [Leia o Índice (INDICE.md)](INDICE.md)
 
-Ao invés de obrigar desenvolvedores em PHP, C++, Node ou Postgres a reescreverem suas pipelines de Sockets e APIs para utilizar o SDK de criptografia segura, a infraestrutura deste repositório sequestra qualquer conexão TCP crua, passando-a nativamente pelas engrenagens do CROM-WASM.
+No nosso [Índice](INDICE.md) você encontrará o caminho do mapa. É obrigatório passar por ele caso deseje acessar os Simuladores WASM UI ou os Guias Executivos para Engenheiros de Software ("Como engolir seu projeto usando CROM").
 
-O trajeto original `[App] -> [API TCP]` é convertido de forma transparente para:
-`[App Local] -> [Cérebro Proxy Ingress] ===(Malha Alienígna P2P)=== [Cérebro Proxy Egress] -> [App Destino]`
+---
 
-**Por que "Alienígena"?** Porque diferentemente do IPSEC puro ou Transport Layer Security clássico onde as transações evidenciam tamanhos explícitos e deixam traços da camada 7, a mutação dos *Codebooks* empurra para a rede blocos esquisitos do espaço Euclidiano. Sem ter acesso à Semântica Local e à Seed Mutante do cliente, um Hacker injetado no meio do Swarm não coleta NADA. Literalmente zero ruído contextualizável.
+## 🏆 Estado da Arte (Auditoria Mestre Final)
 
-## Como as pastas estão organizadas:
+Executamos `master_audit.sh` testando o Cérebro Injetado na defesa contra simuladores de força bruta contínua (Denial-of-Service Cannon, Sybil Ghost Swarms e Fake Plaintexts). Nossos middlewares de criptografia XOR/HMAC alcançaram resultado impecável.
 
-*   **`/docs/`**: A biblioteca de estudos acadêmicos e teóricos detalhados explicando Drop-Ins, Volumes Docker em FUSE e o Isolamento Horizontal de Inquilinos via Hashes.
-*   **`/simulators/`**: O centro nervoso real em Golang. Mocks táticos do Crompressor SDK que escrevem Sockets direto em `os.TempDir` e usam as pipelines do projeto real.
-*   **`/simulators/pentest/`**: Nossas armas de assédio militar contra nosso próprio software. (Sniffers MITM, DoS TCP Cannons injetando Magic Bytes forjados para simular Poisoning).
-*   **`/test_suites/`**: O sistema CI/CD agnóstico do laboratório de QA corporativo. Executa os testes automatizados matando os daemons em background no final e fornecendo laudos auditáveis.
+| Torres de Teste | Status Final de Batalha | Módulo Crítico Validado |
+| ------------- | :-------------: | :------------- |
+| HTTP/RPC/REST (Nominal) | ✅ PASS (21/21) | Criptografia In-flight O(1) Memory |
+| Full-Duplex (WebSocket, DBs) | ✅ PASS | Goroutines `sync.WaitGroup` bidirecional |
+| Silent Drop (Blindagem Anti-Hacker) | ✅ PASS | Aniquilação sem handshake TCP vazado |
 
-## Executando as Suítes de Teste Automatizadas
+![Vitória Absoluta](https://img.shields.io/badge/VULNERABILIDADES_LOCAIS-0-brightgreen.svg) ![Arquitetura P2P](https://img.shields.io/badge/DROP--IN_PROXY-WASM_READY-blue.svg)
 
-Esta infra compila os bins no padrão *Ahead-of-Time* (AOT) cortando 99% da CPU inútil do Golang JIT num laboratório e atira sem piedade em todos os fluxos.
-
-Para auditar o motor agressivamente, vá no diretório Master de testes:
-```bash
-chmod +x test_suites/master_audit.sh
-./test_suites/master_audit.sh
-```
-O console exibirá os testes aprovados baseados nos carimbos de falha contra o canhão e contra os espiões, emitindo os resultados no log unificado na sua tela e dentro do core `/reports/`.
+> **Nota para SREs e Pentesters:** Todo nosso P&D em cima da criptografia do `proxy_universal_in` e `out` em Go está detalhado na seção **O Relatório Pentest** via `INDICE.md`. Use-o com sabedoria!

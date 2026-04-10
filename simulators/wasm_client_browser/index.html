@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SISTEMA PRIVADO - Cérebro Alpha (WASM)</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="grid-bg"></div>
+
+    <div class="dashboard-container">
+        
+        <!-- Painel do Frontend Fake da Empresa -->
+        <div class="glass-panel">
+            <div class="panel-header">
+                <h2>Oculto Corp - Intranet Web</h2>
+                <button id="btnFetch" class="btn-primary">BUSCAR DADOS SIGILOSOS</button>
+            </div>
+            <p style="color: var(--text-dim); font-size: 0.9rem; line-height: 1.6;">
+                Você está acessando a Intranet da empresa através de um dispositivo remoto vazio.<br>
+                Quando você clica no botão, o React executa um `fetch('/api/secret')` padrão.
+                O motor WASM intercepta silenciosamente.
+            </p>
+
+            <div class="logs-container" id="appLogs">
+                <div class="log-entry info">[APP] Frontend renderizado. Cérebro Alpha Motor em Injeção.</div>
+            </div>
+            <div class="cyber-decoration">SYS.ALPHA.READY</div>
+        </div>
+
+        <!-- Painel Técnico do Motor WASM interceptador -->
+        <div class="glass-panel">
+            <div class="panel-header">
+                <h2>
+                    <div class="status-dot"></div>
+                    Cérebro Alpha Engine (Memória)
+                </h2>
+                <span style="font-family: 'JetBrains Mono', monospace; color: var(--accent-blue); font-size: 0.8rem;">
+                    TENANT_ID: ALPHA_0x99
+                </span>
+            </div>
+            <p style="color: var(--text-dim); font-size: 0.9rem; line-height: 1.6;">
+                Este console visualiza o que acontece <b>DENTRO</b> da engine compilada no Browser antes dos dados saírem pela sua placa de rede.
+            </p>
+
+            <div class="logs-container" id="engineLogs">
+                <div class="log-entry info">[WASM] Override efetuado: window.fetch = cromIntercept()</div>
+            </div>
+            <div class="cyber-decoration">MUX.ENCRYPT.ACTIVE</div>
+        </div>
+
+    </div>
+
+    <script src="cerebro_alpha_engine.js"></script>
+    <script>
+        // Lógica do App da Empresa (O desenvolvedor faz sem saber que está rodando o Cérebro)
+        const btnFetch = document.getElementById('btnFetch');
+        const appLogs = document.getElementById('appLogs');
+
+        function appendLog(element, text, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `log-entry ${type}`;
+            div.innerText = text;
+            element.appendChild(div);
+            element.scrollTop = element.scrollHeight;
+        }
+
+        btnFetch.addEventListener('click', async () => {
+            appendLog(appLogs, '[APP] Disparando fetch("http://corp.local/api/secret")...', 'action');
+            try {
+                // Esse fetch será capturado pela engine global em cerebro_alpha_engine.js
+                const response = await fetch("http://corp.local/api/secret");
+                const data = await response.json();
+                
+                appendLog(appLogs, `[APP] Resposta 200 OK. Dados Sensíveis Obtidos!`, 'secure');
+                appendLog(appLogs, `[APP] Payload: ${JSON.stringify(data, null, 2)}`, 'raw');
+            } catch (error) {
+                appendLog(appLogs, `[APP-ERROR] Requisição falhou: ${error.message}`, 'info');
+            }
+        });
+    </script>
+</body>
+</html>

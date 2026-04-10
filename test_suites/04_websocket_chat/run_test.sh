@@ -1,24 +1,42 @@
 #!/bin/bash
+# Suite 04: WebSocket bidirecional via proxy CROM
+# O nc echo agora vai atrás do proxy (porta 8080) e o client bate no proxy_in (5432)
+BIN="$(cd "$(dirname "$0")/../../test_suites/bin" && pwd)"
+REPORTS="$(cd "$(dirname "$0")/../reports" && pwd)"
 
-# Simulando WebSocker (Long lived TCP connection) usando um netcat server rodando wsh/echo
-ROOT_BIN="../../test_suites/bin"
+# Backend echo server na porta 8080 (simula WebSocket echo)
+python3 -c "
+import socket
+s=socket.socket()
+s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+s.bind(('127.0.0.1',8080))
+s.listen(5)
+while True:
+    c,_=s.accept()
+    try:
+        d=c.recv(4096)
+        if d: c.sendall(d)  # echo back
+    except: pass
+    c.close()
+" &
+PID_ECHO=$!
+sleep 0.3
 
-killall proxy_in proxy_out nc 2>/dev/null
-
-# Sobe um Dummy Node (Socket bruto com echo simulando ws handshake)
-nc -l -p 8081 -k -c 'xargs -n1 echo' > /dev/null 2>&1 &
-PID_NC=$!
-
-# Modifica o Backend Target temporariamente
-# (Apenas conceitual pois os binarios buildados hardcodaram 8080, 
-# mas este teste exemplifica o check de falhas de timeout contínuas).
-$ROOT_BIN/proxy_out > /dev/null 2>&1 &
+$BIN/proxy_out &
 PID_OUT=$!
-
-$ROOT_BIN/proxy_in > /dev/null 2>&1 &
+sleep 0.3
+$BIN/proxy_in &
 PID_IN=$!
-sleep 0.5 
+sleep 0.5
 
-echo "04_websocket_chat: EM DESENVOLVIMENTO_CORE" > ../reports/04_status.log
+RESP=$(echo "WS_HEARTBEAT_PING" | nc -w 3 127.0.0.1 5432 2>/dev/null || echo "")
 
-kill $PID_IN $PID_OUT $PID_NC 2>/dev/null
+if [[ "$RESP" == *"HEARTBEAT"* ]] || [[ "$RESP" == *"WS_"* ]]; then
+    echo "04_websocket_chat: PASS (echo bidirecional funcionou)" > "$REPORTS/04_status.log"
+    echo "PASS"
+else
+    echo "04_websocket_chat: FAIL (resp='$RESP')" > "$REPORTS/04_status.log"
+    echo "FAIL"
+fi
+
+kill $PID_ECHO $PID_OUT $PID_IN 2>/dev/null

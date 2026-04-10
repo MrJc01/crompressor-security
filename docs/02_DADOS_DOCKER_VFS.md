@@ -24,3 +24,6 @@ Ao rodar instâncias ou serviços Docker Críticos, redirecionamos todos os mapp
 > Todo bloco gravado no CROMFS-FUSE emite uma folha na `internal/merkle`. 
 > Se um atacante usar uma tática "Supply Chain" rodando dentro de seu container, criptografando tudo com um *Ransomware* silencioso ou apagando as tables:
 > Você reverte no tempo usando os metadados das últimas folhas Hash Válidas, ignorando instantaneamente os deltas da infecção. Tempo de reparo: Near Zero.
+
+---
+**[🧭 Voltar ao Índice Principal](../INDICE.md)**

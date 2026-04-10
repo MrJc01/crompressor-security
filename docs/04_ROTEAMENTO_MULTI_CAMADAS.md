@@ -26,3 +26,6 @@ Recomendamos o Roteamento Multi-Camadas para tráfegos como:
 - Relatórios Diários Seguros (Dados Fiscais).
 - Transferência de logs hiper sensíveis Docker Host.
 - Comandos SysAdmin Remotos via SSH Proxifier (Baixa banda, Zero Vazamento).
+
+---
+**[🧭 Voltar ao Índice Principal](../INDICE.md)**

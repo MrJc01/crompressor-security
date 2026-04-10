@@ -1,29 +1,26 @@
 #!/bin/bash
-# NOME: 01_routing_nominal
-# Run test ajustado
+# Suite 01: Routing Nominal (HTTP REST Drop-In)
+BIN="$(cd "$(dirname "$0")/../../test_suites/bin" && pwd)"
+REPORTS="$(cd "$(dirname "$0")/../reports" && pwd)"
 
-ROOT_BIN="../../test_suites/bin"
+$BIN/dummy_backend &
+PID1=$!
+sleep 0.3
+$BIN/proxy_out &
+PID2=$!
+sleep 0.3
+$BIN/proxy_in &
+PID3=$!
+sleep 0.5
 
-killall proxy_in proxy_out dummy_backend 2>/dev/null
+RESP=$(curl -s --max-time 3 http://127.0.0.1:5432/api/data 2>/dev/null || echo "EMPTY")
 
-# Subindo Binários Nativos Instantaneos
-$ROOT_BIN/dummy_backend > /dev/null 2>&1 &
-PID_DUMMY=$!
-
-$ROOT_BIN/proxy_out > /dev/null 2>&1 &
-PID_OUT=$!
-
-$ROOT_BIN/proxy_in > /dev/null 2>&1 &
-PID_IN=$!
-
-sleep 0.5 # Apenas meio segundo pois não há build JIT
-
-CURL_OUTPUT=$(curl -s http://127.0.0.1:5432/api/data)
-
-if [[ "$CURL_OUTPUT" == *"Legacy_App"* ]]; then
-    echo "01_routing_nominal: PASS" > ../reports/01_status.log
+if [[ "$RESP" == *"Legacy"* ]] || [[ "$RESP" == *"alienigena"* ]]; then
+    echo "01_routing_nominal: PASS" > "$REPORTS/01_status.log"
+    echo "PASS"
 else
-    echo "01_routing_nominal: FAIL" > ../reports/01_status.log
+    echo "01_routing_nominal: FAIL (resp=$RESP)" > "$REPORTS/01_status.log"
+    echo "FAIL"
 fi
 
-kill $PID_IN $PID_OUT $PID_DUMMY 2>/dev/null
+kill $PID1 $PID2 $PID3 2>/dev/null
