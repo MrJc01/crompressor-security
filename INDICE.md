@@ -15,7 +15,7 @@ Se você é novo no conceito da arquitetura CROM (ou está tentando entender com
 2. **[Manual Mestre de Operação Prática (SysAdmin)](docs/MANUAL_DE_OPERACAO.md)**: Comece por aqui se só quer aprender a instalar cérebros, plugar o dashboard CLI e usar no dia 1 sem teoria inútil.
 3. **[Relatório de Análise Final (A Teoria Base)](docs/00_REPORT_ANALISE_FINAL.md)**: A introdução filosófica e teórica ao Cérebro e ao Virtual File System (VFS).
 4. **[Guia Master: Drop-In Proxy e Segredos do Englobamento](docs/how_to_engulf/GUIDE_MASTER.md)**: Como, tecnicamente, injetamos a nuvem P2P nativa e bloqueamos o mundo de acessar portas expostas.
-5. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo e auditoria de 23 falhas de guerra superadas pela criptografia XOR P2P Orgânica.
+5. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo e auditoria de 24 falhas de guerra superadas pela criptografia XOR P2P Orgânica.
 
 *(Sente-se familiarizado com a teoria acima? Prossiga para os Laboratórios Práticos abaixo.)*
 
@@ -49,6 +49,7 @@ Mostramos a Devs e SREs corporativos como aplicar a **Engenharia SecOps CROM** e
 *   📌 **[Cenário B: Node.js, Banco de React SPA e Redis](docs/how_to_engulf/examples/02_Node_React_Redis.md)**
 *   📌 **[Cenário C: Java Spring Boot O(1) e Arquivos SOAP Monstruosos](docs/how_to_engulf/examples/03_Java_SpringBoot_Corporativo.md)**
 *   📌 **[Cenário Web3: Blindando DApps, IPFS, Geth e Redes DeFi p/ Block de MEVs](docs/how_to_engulf/examples/04_Web3_Blockchain_DApps.md)**
+*   📌 **[🆕 Cenário DRM: Software Anti-Pirataria SelfHosted (Superior ao modelo Adobe)](docs/how_to_engulf/examples/05_SelfHosted_Private_DRM.md)**
 
 ---
 
@@ -64,9 +65,9 @@ Nós recusamos a explicação puramente teórica. O diretório de simuladores é
 
 ## ⚔️ Auditório de Tormenta (`/test_suites`)
 
-Este é o local das nossas **23 Torres de Testes Automatizadas**. Onde rodamos nosso arsenal na unha.
+Este é o local das nossas **24 Torres de Testes Automatizadas**. Onde rodamos nosso arsenal na unha.
 
-> **📍 [LER O GUIA DAS 23 TORRES: O QUE CADA TESTE FAZ](test_suites/GUIA_DAS_23_TORRES.md)**
+> **📍 [LER O GUIA DAS 24 TORRES: O QUE CADA TESTE FAZ](test_suites/GUIA_DAS_24_TORRES.md)**
 
 O arquivo raiz `master_audit.sh` executa todas as torres abaixo simultaneamente disparando cenários de guerra:
 
@@ -93,3 +94,4 @@ O arquivo raiz `master_audit.sh` executa todas as torres abaixo simultaneamente 
 *   **[21_private_brain_system](test_suites/21_private_brain_system/README.md)**: Consolidou a tese do sistema privado, que nem sequer usa o framework clássico da empresa, fechando tráfego num loopback escuro invisível.
 *   **[22_onion_multi_hop_route](test_suites/22_onion_multi_hop_route/README.md)**: Testa o repasse cebola cego. Um novo binário `proxy_onion_relay` repassa Sockets Alpha de um computador para o outro validando Dark Routing.
 *   **[23_jitter_cover_traffic](test_suites/23_jitter_cover_traffic/README.md)**: O teste do Motor da Goroutine Anti-NSA. Garante que rajadas de tráfego de Lixo Hexadecimal (`JITT Magic Headers`) sejam identificadas na nuvem e Dropadas do canal principal sem interromper uma transação Web3 válida.
+*   **[24_selfhosted_drm_isolation](test_suites/24_selfhosted_drm_isolation/README.md)**: DRM Anti-Pirataria Local. Prova que nem o dono da máquina (root) consegue acessar a API do App protegido sem a Seed CROM válida. Modelo superior ao modelo Adobe/hosts.

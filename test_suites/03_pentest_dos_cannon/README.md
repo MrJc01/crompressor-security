@@ -19,4 +19,4 @@ Para executar este teste isoladamente, você pode rodar o executador dele na rai
 ### 🧭 O Mapa Completo
 Esta torre é apenas uma das dezenas simuladas pela arquitetura. Para compreender como ela se integra com ataques gRPC, Mempool MEV, Onion, Jitter e Mitm:
 
-🔙 **[VOLTAR AO GUIA DAS 23 TORRES (Visualizar Toda a Auditoria)](../GUIA_DAS_23_TORRES.md)**
+🔙 **[VOLTAR AO GUIA DAS 23 TORRES (Visualizar Toda a Auditoria)](../GUIA_DAS_24_TORRES.md)**

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -30,30 +33,49 @@ func applyLLMSemanticExpansion(data []byte) []byte {
 	return []byte(str)
 }
 
-// cromDecryptPacket valida e descriptografa um pacote CROM.
-// Retorna (plaintext, isJitter). Se nil, pacote inválido (Hacker).
+// cromDecryptPacket valida e descriptografa um pacote CROM via AES-256-GCM.
+// Retorna (plaintext, isJitter). Se nil, pacote inválido (Hacker) → Silent Drop.
+// O GCM Seal garante INTEGRIDADE + AUTENTICIDADE: qualquer bit adulterado = rejeição total.
 func cromDecryptPacket(packet []byte) ([]byte, bool) {
-	if len(packet) < 13 {
+	if len(packet) < 4 {
 		return nil, false
 	}
-	
+
 	magic := string(packet[:4])
 	if magic != CromMagic && magic != JitterMagic {
 		return nil, false
 	}
-	
+
 	isJitter := magic == JitterMagic
+	ciphertext := packet[4:]
 
-	nonce := packet[4:12]
-	encrypted := packet[12:]
-
+	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
 	mac := hmac.New(sha256.New, []byte(TenantSeed))
-	mac.Write([]byte("CROM_SESSION_KEY"))
-	key := mac.Sum(nil)
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil) // 32 bytes = AES-256
 
-	decrypted := make([]byte, len(encrypted))
-	for i, b := range encrypted {
-		decrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, false
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, false
+	}
+
+	nonceSize := aesgcm.NonceSize() // 12 bytes padrão
+	if len(ciphertext) < nonceSize {
+		return nil, false
+	}
+
+	nonce := ciphertext[:nonceSize]
+	sealed := ciphertext[nonceSize:]
+
+	// Open valida o GCM Tag (16 bytes) — qualquer adulteração = erro = DROP
+	decrypted, err := aesgcm.Open(nil, nonce, sealed, []byte(magic))
+	if err != nil {
+		// GCM Authentication FALHOU: pacote forjado, corrompido ou com Seed errada
+		return nil, false
 	}
 
 	if isJitter {
@@ -63,15 +85,10 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	return applyLLMSemanticExpansion(decrypted), false
 }
 
-// cromEncrypt aplica XOR cíclico com chave HMAC para a resposta de volta.
+// cromEncrypt aplica AES-256-GCM autenticado para a resposta de volta ao Alpha.
+// Compressão Semântica → AES-GCM Seal (Nonce aleatório + Tag de integridade 16B)
 func cromEncrypt(data []byte) []byte {
-	mac := hmac.New(sha256.New, []byte(TenantSeed))
-	mac.Write([]byte("CROM_SESSION_KEY"))
-	key := mac.Sum(nil)
-
-	nonce := make([]byte, 8)
-	rand.Read(nonce)
-
+	// Compressão semântica LLM
 	str := string(data)
 	str = strings.ReplaceAll(str, "HTTP/1.1", "⌬HTTP1")
 	str = strings.ReplaceAll(str, "Accept: application/json", "⌬CTJSON")
@@ -79,15 +96,33 @@ func cromEncrypt(data []byte) []byte {
 	str = strings.ReplaceAll(str, "User-Agent", "⌬UA")
 	processedData := []byte(str)
 
-	encrypted := make([]byte, len(processedData))
-	for i, b := range processedData {
-		encrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
+	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil) // 32 bytes = AES-256
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("[OMEGA-CRYPTO] Falha ao criar cifra AES: %v", err)
+		return nil
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Printf("[OMEGA-CRYPTO] Falha ao criar GCM: %v", err)
+		return nil
 	}
 
-	packet := make([]byte, 0, 4+8+len(encrypted))
+	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
+	rand.Read(nonce)
+
+	// Seal: cifra + autentica. AAD (Additional Authenticated Data) = magic header
+	sealed := aesgcm.Seal(nil, nonce, processedData, []byte(CromMagic))
+
+	// Pacote final: [MAGIC 4B][NONCE 12B][CIPHERTEXT+TAG]
+	packet := make([]byte, 0, 4+len(nonce)+len(sealed))
 	packet = append(packet, []byte(CromMagic)...)
 	packet = append(packet, nonce...)
-	packet = append(packet, encrypted...)
+	packet = append(packet, sealed...)
 	return packet
 }
 
@@ -95,8 +130,14 @@ func handleAlienConnection(alienConn net.Conn) {
 	defer alienConn.Close()
 
 	// Ler o primeiro chunk para validar se é um pacote CROM válido
+	// Prevenção inteligente contra Slowloris: Timeout de 3s na borda L4
+	alienConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	initialBuf := make([]byte, 32768)
 	n, err := alienConn.Read(initialBuf)
+	
+	// Limpar o deadline após o handshake para não afetar streams contínuos legítimos (como Chat/WebSocket)
+	alienConn.SetReadDeadline(time.Time{})
+	
 	if err != nil {
 		return
 	}

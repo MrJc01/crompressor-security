@@ -1,6 +1,8 @@
 package crommobile
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -34,9 +36,9 @@ func applyLLMSemanticCompression(data []byte) []byte {
 	return []byte(str)
 }
 
-// cromEncrypt aplica Tokenização Semântica -> XOR -> HMAC
+// cromEncrypt aplica Tokenização Semântica → AES-256-GCM (Cifra Autenticada Bancária)
 func cromEncrypt(data []byte, magic string) []byte {
-	
+
 	// Compressão Cognitiva (Se for CROM normal)
 	var processedData []byte
 	if magic == CromMagic {
@@ -45,46 +47,74 @@ func cromEncrypt(data []byte, magic string) []byte {
 		processedData = data
 	}
 
+	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
 	mac := hmac.New(sha256.New, []byte(GlobalTenantSeed))
-	mac.Write([]byte("CROM_SESSION_KEY"))
-	key := mac.Sum(nil)
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil) // 32 bytes = AES-256
 
-	nonce := make([]byte, 8)
-	rand.Read(nonce)
-
-	encrypted := make([]byte, len(processedData))
-	for i, b := range processedData {
-		encrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("[ALPHA-CRYPTO] Falha ao criar cifra AES: %v", err)
+		return nil
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Printf("[ALPHA-CRYPTO] Falha ao criar GCM: %v", err)
+		return nil
 	}
 
-	packet := make([]byte, 0, 4+8+len(encrypted))
+	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
+	rand.Read(nonce)
+
+	// Seal: cifra + autentica. AAD (Additional Authenticated Data) = magic header
+	sealed := aesgcm.Seal(nil, nonce, processedData, []byte(magic))
+
+	// Pacote final: [MAGIC 4B][NONCE 12B][CIPHERTEXT+TAG]
+	packet := make([]byte, 0, 4+len(nonce)+len(sealed))
 	packet = append(packet, []byte(magic)...)
 	packet = append(packet, nonce...)
-	packet = append(packet, encrypted...)
+	packet = append(packet, sealed...)
 	return packet
 }
 
 func cromDecryptPacket(packet []byte) []byte {
-	if len(packet) < 13 {
+	if len(packet) < 4 {
 		return nil
 	}
-	if string(packet[:4]) != CromMagic { // No client não recebe Jitter
+	if string(packet[:4]) != CromMagic {
 		return nil
 	}
-	nonce := packet[4:12]
-	encrypted := packet[12:]
+	ciphertext := packet[4:]
 
+	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
 	mac := hmac.New(sha256.New, []byte(GlobalTenantSeed))
-	mac.Write([]byte("CROM_SESSION_KEY"))
-	key := mac.Sum(nil)
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil) // 32 bytes = AES-256
 
-	decrypted := make([]byte, len(encrypted))
-	for i, b := range encrypted {
-		decrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil
 	}
 
-	// Reverter compressão (O Omega não inverte nada pro Alpha que seja texto "cru", maximo que pode chegar é o Omega mandando DB plain e chegando encriptado no Alpha)
-	// Na verdade a reversao ocorreria no Omega e aqui tbm (Simetrico)
+	nonceSize := aesgcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil
+	}
+
+	nonce := ciphertext[:nonceSize]
+	sealed := ciphertext[nonceSize:]
+
+	// Open valida o GCM Tag — qualquer adulteração = DROP
+	decrypted, err := aesgcm.Open(nil, nonce, sealed, []byte(CromMagic))
+	if err != nil {
+		return nil
+	}
+
+	// Reverter compressão semântica
 	str := string(decrypted)
 	str = strings.ReplaceAll(str, "⌬HTTP1", "HTTP/1.1")
 	str = strings.ReplaceAll(str, "⌬CTJSON", "Accept: application/json")
