@@ -6,10 +6,10 @@ REPORTS="$(cd "$(dirname "$0")/../reports" && pwd)"
 $BIN/dummy_backend &
 PID1=$!
 sleep 0.3
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID2=$!
 sleep 0.3
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID3=$!
 sleep 0.5
 
@@ -24,7 +24,7 @@ sleep 0.3
 R2=$(curl -s --max-time 2 http://127.0.0.1:5432/ 2>/dev/null || echo "CONN_REFUSED")
 
 # Re-reviver proxy_out
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID2_NEW=$!
 sleep 0.5
 

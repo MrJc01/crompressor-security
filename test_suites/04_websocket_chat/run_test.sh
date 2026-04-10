@@ -22,10 +22,10 @@ while True:
 PID_ECHO=$!
 sleep 0.3
 
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID_OUT=$!
 sleep 0.3
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID_IN=$!
 sleep 0.5
 

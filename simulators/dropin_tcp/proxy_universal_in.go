@@ -18,9 +18,7 @@ func main() {
 		cloudTarget = "127.0.0.1:9999"
 	}
 
-	// [GEN-6 RT-02 FIX] A seed é carregada pre-emptivamente via GetTenantSeed(),
-	// que agora suporta STDIN pipe com prioridade absoluta sobre env vars.
-	crommobile.GetTenantSeed()
+
 
 	// [GEN-6 RT-11 FIX] Banner sanitizado — sem revelar mecanismos internos.
 	fmt.Println("=================================================================")

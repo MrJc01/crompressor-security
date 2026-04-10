@@ -7,11 +7,11 @@ $BIN/dummy_backend &
 PID_BACK=$!
 sleep 1.0
 
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID_OUT=$!
 sleep 1.0
 
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID_IN=$!
 sleep 2.0 # Aguarda alguns segundos para a Goroutine do proxy_in floodar o Omega com lixo JITT
 

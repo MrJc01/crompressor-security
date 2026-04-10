@@ -22,7 +22,7 @@ sleep 0.2
 $BIN/dummy_backend &
 PID_REAL=$!
 sleep 0.3
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID2=$!
 sleep 0.3
 

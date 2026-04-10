@@ -21,10 +21,10 @@ http.server.HTTPServer(('127.0.0.1',8080),H).serve_forever()
 PID_PRIV=$!
 sleep 0.3
 
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID_OUT=$!
 sleep 0.3
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID_IN=$!
 sleep 0.5
 

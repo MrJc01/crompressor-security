@@ -59,7 +59,13 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 
 	// Localizar trim
 	seedBytes := rawBytes[:n]
-	var trimmed []byte
+	var validCount int
+	for _, b := range seedBytes {
+		if b >= 32 && b <= 126 {
+			validCount++
+		}
+	}
+	trimmed := make([]byte, 0, validCount)
 	for _, b := range seedBytes {
 		if b >= 32 && b <= 126 {
 			trimmed = append(trimmed, b)
@@ -131,7 +137,7 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 		return nil, err
 	}
 	packetLen := binary.BigEndian.Uint16(lenBuf)
-	if packetLen > 32768 {
+	if packetLen > 35000 {
 		return nil, fmt.Errorf("length buffer oversize attack")
 	}
 	packetBuf := make([]byte, packetLen)
@@ -167,12 +173,10 @@ func applyLLMSemanticExpansion(data []byte) []byte {
 }
 
 // cromDecryptPacket valida e descriptografa um pacote CROM via AES-256-GCM.
-// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+GCM_TAG]
-// Retorna (plaintext, isJitter). Se nil, pacote inválido (Hacker) → Silent Drop.
-// O GCM Seal garante INTEGRIDADE + AUTENTICIDADE: qualquer bit adulterado = rejeição total.
+// [GEN-7] Formato: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+GCM_TAG]
 func cromDecryptPacket(packet []byte) ([]byte, bool) {
-	// Mínimo: 4 (magic) + 8 (timestamp) + 12 (nonce) + 16 (gcm tag) = 40 bytes
-	if len(packet) < 40 {
+	// Mínimo: 4 (magic) + 1 (dir) + 8 (timestamp) + 12 (nonce) + 16 (gcm tag) = 41 bytes
+	if len(packet) < 41 {
 		return nil, false
 	}
 
@@ -181,12 +185,17 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 		return nil, false
 	}
 
+	dirFlag := packet[4]
+	if dirFlag != 'C' && dirFlag != 'J' {
+		// [GEN-7 VULN-1 FIX] Anti-Reflection Attack. Se não for C ou J, reject.
+		return nil, false
+	}
+
 	isJitter := magic == JitterMagic
 
-	// [ENGULF-FIX VULN-4] Extrair e validar Timestamp autenticado contra Replay Window
-	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B] — ambos autenticados pelo GCM Tag
-	aad := packet[:12]
-	ciphertext := packet[12:]
+	// AAD Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B] — autenticados pelo GCM Tag
+	aad := packet[:13]
+	ciphertext := packet[13:]
 
 	aesgcm := getAEAD()
 	nonceSize := aesgcm.NonceSize() // 12 bytes padrão
@@ -206,7 +215,7 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	}
 
 	// [GEN-7 RT-03] Apenas desempacotar e avaliar lógicas L7 complexas (e Logs) SE O PACOTE FOR AUTÊNTICO.
-	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
+	packetTime := int64(binary.BigEndian.Uint64(packet[5:13]))
 	now := time.Now().Unix()
 	drift := now - packetTime
 	if drift < 0 {
@@ -233,7 +242,7 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 }
 
 // cromEncrypt aplica AES-256-GCM autenticado para a resposta de volta ao Alpha.
-// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
+// [GEN-7] Formato: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
 func cromEncrypt(data []byte) []byte {
 	// [ENGULF-FIX VULN-2] Payload transparente — sem compressão semântica cega em L4.
 	// A mutação de tamanho de payload destruía Content-Length HTTP, permitindo Request Smuggling.
@@ -248,21 +257,23 @@ func cromEncrypt(data []byte) []byte {
 		return nil
 	}
 
-	// [ENGULF-FIX VULN-4] Timestamp Gen-5 para AAD autenticado contra Replay
+	// Timestamp Gen-7 para AAD autenticado contra Replay
 	tsBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(tsBytes, uint64(time.Now().Unix()))
 
-	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B]
-	aad := make([]byte, 0, 12)
+	// AAD Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B]
+	aad := make([]byte, 0, 13)
 	aad = append(aad, []byte(CromMagic)...)
+	aad = append(aad, 'S') // Direcional: S = Server -> Client
 	aad = append(aad, tsBytes...)
 
-	// Seal: cifra + autentica com AAD expandido (magic + timestamp)
+	// Seal: cifra + autentica com AAD expandido
 	sealed := aesgcm.Seal(nil, nonce, processedData, aad)
 
-	// Pacote final Gen-5: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
-	packet := make([]byte, 0, 4+8+len(nonce)+len(sealed))
+	// Pacote final Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
+	packet := make([]byte, 0, 4+1+8+len(nonce)+len(sealed))
 	packet = append(packet, []byte(CromMagic)...)
+	packet = append(packet, 'S')
 	packet = append(packet, tsBytes...)
 	packet = append(packet, nonce...)
 	packet = append(packet, sealed...)

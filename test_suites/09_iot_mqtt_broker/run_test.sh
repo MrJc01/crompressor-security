@@ -20,10 +20,10 @@ while True:
 PID_MQTT=$!
 sleep 0.3
 
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID2=$!
 sleep 0.3
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID3=$!
 sleep 0.5
 

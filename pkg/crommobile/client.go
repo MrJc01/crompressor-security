@@ -64,6 +64,14 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 			log.Fatal("[ALPHA-FATAL] Falha lendo pipe STDIN.")
 		}
 
+		// Alloc estático para Memory Leak
+		var validCount int
+		for _, b := range rawBytes[:n] {
+			if b >= 32 && b <= 126 {
+				validCount++
+			}
+		}
+		activeSeed = make([]byte, 0, validCount)
 		for _, b := range rawBytes[:n] {
 			if b >= 32 && b <= 126 {
 				activeSeed = append(activeSeed, b)
@@ -134,7 +142,7 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 		return nil, err
 	}
 	packetLen := binary.BigEndian.Uint16(lenBuf)
-	if packetLen > 32768 {
+	if packetLen > 35000 {
 		return nil, fmt.Errorf("length buffer oversize attack")
 	}
 	packetBuf := make([]byte, packetLen)
@@ -165,7 +173,7 @@ func applyLLMSemanticCompression(data []byte) []byte {
 }
 
 // cromEncrypt aplica AES-256-GCM autenticado.
-// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
+// [GEN-7] Formato: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
 func cromEncrypt(data []byte, magic string) []byte {
 	// [ENGULF-FIX VULN-2] Payload transparente — sem compressão semântica cega em L4.
 	processedData := data
@@ -178,21 +186,28 @@ func cromEncrypt(data []byte, magic string) []byte {
 		return nil
 	}
 
-	// [ENGULF-FIX VULN-4] Timestamp Gen-5 para AAD autenticado contra Replay
+	// Timestamp Gen-7 para AAD autenticado contra Replay
 	tsBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(tsBytes, uint64(time.Now().Unix()))
 
-	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B]
-	aad := make([]byte, 0, 12)
+	dirFlag := byte('C')
+	if magic == JitterMagic {
+		dirFlag = 'J'
+	}
+
+	// AAD Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B]
+	aad := make([]byte, 0, 13)
 	aad = append(aad, []byte(magic)...)
+	aad = append(aad, dirFlag)
 	aad = append(aad, tsBytes...)
 
-	// Seal: cifra + autentica com AAD expandido (magic + timestamp)
+	// Seal: cifra + autentica com AAD expandido (magic + dir + timestamp)
 	sealed := aesgcm.Seal(nil, nonce, processedData, aad)
 
-	// Pacote final Gen-5: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
-	packet := make([]byte, 0, 4+8+len(nonce)+len(sealed))
+	// Pacote final Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
+	packet := make([]byte, 0, 4+1+8+len(nonce)+len(sealed))
 	packet = append(packet, []byte(magic)...)
+	packet = append(packet, dirFlag)
 	packet = append(packet, tsBytes...)
 	packet = append(packet, nonce...)
 	packet = append(packet, sealed...)
@@ -200,19 +215,24 @@ func cromEncrypt(data []byte, magic string) []byte {
 }
 
 // cromDecryptPacket valida e descriptografa um pacote CROM via AES-256-GCM.
-// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+GCM_TAG]
+// [GEN-7] Formato: [MAGIC 4B][DIR 1B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+GCM_TAG]
 func cromDecryptPacket(packet []byte) []byte {
-	// Mínimo: 4 (magic) + 8 (timestamp) + 12 (nonce) + 16 (gcm tag) = 40 bytes
-	if len(packet) < 40 {
+	// Mínimo: 4 (magic) + 1 (dir) + 8 (ts) + 12 (nonce) + 16 (tag) = 41
+	if len(packet) < 41 {
 		return nil
 	}
 	if string(packet[:4]) != CromMagic {
 		return nil
 	}
 
-	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B]
-	aad := packet[:12]
-	ciphertext := packet[12:]
+	dirFlag := packet[4]
+	if dirFlag != 'S' {
+		return nil
+	}
+
+	// AAD Gen-7: [MAGIC 4B][DIR 1B][TIMESTAMP 8B]
+	aad := packet[:13]
+	ciphertext := packet[13:]
 
 	aesgcm := getAEAD()
 	nonceSize := aesgcm.NonceSize()
@@ -230,7 +250,7 @@ func cromDecryptPacket(packet []byte) []byte {
 	}
 
 	// [GEN-7 RT-03] Avaliar drift APÓS AEAD para não permitir Logs Forjados
-	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
+	packetTime := int64(binary.BigEndian.Uint64(packet[5:13]))
 	now := time.Now().Unix()
 	drift := now - packetTime
 	if drift < 0 {

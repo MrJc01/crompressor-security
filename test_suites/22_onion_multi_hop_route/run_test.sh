@@ -9,7 +9,7 @@ PID_BACK=$!
 sleep 1.0
 
 # Omega (9999) apontando pro 8080
-$BIN/proxy_out &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_out &
 PID_OUT=$!
 sleep 1.0
 
@@ -20,7 +20,7 @@ sleep 1.0
 
 # Alpha (5432) atirando no Onion (9955) inves de ir no 9999 !
 export SWARM_CLOUD_TARGET="127.0.0.1:9955"
-$BIN/proxy_in &
+echo "$CROM_TENANT_SEED" | $BIN/proxy_in &
 PID_IN=$!
 sleep 1.0
 
