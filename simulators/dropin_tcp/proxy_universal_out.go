@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"runtime"
 	"runtime/debug"
@@ -38,6 +40,16 @@ const (
 
 	// [GEN-6 RT-08 FIX / GEN-7] Aumentado massivamente para suportar Jitter Burst.
 	MaxConnsPerIP = 500
+
+	// [GEN-8 RT-202 FIX] Limite máximo de entradas no nonce cache para prevenir OOM.
+	MaxNonceCacheEntries = 100000
+
+	// [GEN-8 RT-204 FIX] Idle timeout para mid-stream reads (segundos).
+	// Previne goroutine exhaustion via slow-feed após handshake.
+	MidStreamIdleTimeoutSecs = 120
+
+	// [GEN-8 RT-205 FIX] Tamanho máximo de pacote no framing.
+	MaxFramedPacketSize = 35000
 )
 
 // [GEN-7 RT-02 FIX] Seed não é mais mantida globalmente em string imutável.
@@ -47,9 +59,55 @@ const (
 var ipMutex sync.Mutex
 var perIPConns = make(map[string]int)
 
+// [GEN-8 RT-202 FIX] Contador atômico de entradas no nonce cache.
+var nonceCacheCount int64
+
+// [GEN-8 RT-208 FIX] KDF label ofuscada em byte-level para prevenir extração via strings.
+// Decodificada em runtime via XOR com chave de rotação.
+var kdfLabelObfuscated = []byte{
+	0x1a, 0x0b, 0x16, 0x14, 0x06, 0x18, 0x1c, 0x0a,
+	0x06, 0x1e, 0x1a, 0x14, 0x06, 0x12, 0x1c, 0x00,
+	0x06, 0x0f, 0x6d,
+}
+var kdfLabelXORKey = byte(0x59)
+
+func decodeKDFLabel() []byte {
+	out := make([]byte, len(kdfLabelObfuscated))
+	for i, b := range kdfLabelObfuscated {
+		out[i] = b ^ kdfLabelXORKey
+	}
+	return out
+}
+
+// [GEN-8 RT-203 FIX] Watchdog anti-debug contínuo.
+// Verifica TracerPid a cada 500ms em vez de apenas no startup.
+func startAntiDebugWatchdog() {
+	go func() {
+		for {
+			time.Sleep(500 * time.Millisecond)
+			status, err := os.ReadFile("/proc/self/status")
+			if err != nil {
+				continue
+			}
+			statusStr := string(status)
+			if strings.Contains(statusStr, "TracerPid:\t") &&
+				!strings.Contains(statusStr, "TracerPid:\t0") {
+				log.Fatal("[OMEGA-FATAL-DRM] ptrace() detectado em runtime. Abort imediato!")
+			}
+		}
+	}()
+}
+
 // secureReadSeed lê a chave de forma segura no startup e joga tudo para bytes apagáveis
 func secureReadSeedAndInitAEAD() cipher.AEAD {
-	// [GEN-7 DRM] Anti-Trace (TracerPid Check)
+	// [GEN-8 RT-206 FIX] Bloquear /proc/PID/mem reads e core dumps.
+	// PR_SET_DUMPABLE = 4, valor 0 = não-dumpable.
+	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 4, 0, 0)
+	if errno != 0 {
+		log.Printf("[OMEGA-SECURITY] Aviso: prctl(PR_SET_DUMPABLE,0) falhou: %v", errno)
+	}
+
+	// [GEN-7 DRM] Anti-Trace (TracerPid Check) — verificação inicial no startup
 	status, err := os.ReadFile("/proc/self/status")
 	if err == nil && strings.Contains(string(status), "TracerPid:\t") {
 		if !strings.Contains(string(status), "TracerPid:\t0") {
@@ -57,9 +115,12 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 		}
 	}
 
+	// [GEN-8 RT-203 FIX] Iniciar watchdog contínuo após check inicial
+	startAntiDebugWatchdog()
+
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		log.Fatal("[OMEGA-SECURITY] ⚠️ MODO INSEGURO DETECTADO. Forneça a Seed de Tenant APENAS via STDIN pipe (echo SEED | proxy_out).")
+		log.Fatal("[OMEGA-SECURITY] MODO INSEGURO DETECTADO. Forneça a Seed de Tenant APENAS via STDIN pipe (echo SEED | proxy_out).")
 	}
 
 	rawBytes := make([]byte, 1024)
@@ -87,10 +148,14 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 		log.Fatal("[OMEGA-FATAL] Seed STDIN vazia.")
 	}
 
-	// [GEN-7] Derivar AES key IMEDIATAMENTE.
+	// [GEN-8 RT-208 FIX] Derivar AES key com label ofuscada.
+	kdfLabel := decodeKDFLabel()
 	mac := hmac.New(sha256.New, trimmed)
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	mac.Write(kdfLabel)
 	key := mac.Sum(nil)
+
+	// [GEN-8] Zeroize label decodificada imediatamente
+	for i := range kdfLabel { kdfLabel[i] = 0 }
 
 	// [GEN-7] MANUALLY ZERO THE SEED BUFFER AND RAW BYTES
 	for i := range trimmed { trimmed[i] = 0 }
@@ -113,7 +178,7 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 	runtime.GC()
 	debug.FreeOSMemory()
 
-	log.Println("[OMEGA-SECURITY] Módulo KMS Criptográfico Armado. Limpeza de memória executada com sucesso (Runtime Zeroize).")
+	log.Println("[OMEGA-SECURITY] KMS Armado. Runtime Zeroize concluído.")
 	return aead
 }
 
@@ -127,19 +192,24 @@ func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
 		globalAEAD = secureReadSeedAndInitAEAD()
 
-		// [ENGULF-FIX VULN-4] Janitor com TTL granular — limpa entradas individuais após 60s
+		// [GEN-8 RT-202 FIX] Janitor com TTL granular + limite de entradas.
 		go func() {
 			for {
 				time.Sleep(10 * time.Second)
 				now := time.Now().Unix()
+				var cleaned int64
 				globalNonceCache.Range(func(key, value interface{}) bool {
 					if ts, ok := value.(int64); ok {
 						if now-ts > 60 {
 							globalNonceCache.Delete(key)
+							cleaned++
 						}
 					}
 					return true
 				})
+				if cleaned > 0 {
+					atomic.AddInt64(&nonceCacheCount, -cleaned)
+				}
 			}
 		}()
 	})
@@ -165,7 +235,11 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 
 // [GEN-6 RT-05 FIX] Atomic write: combina length + payload em um único buffer
 // para eliminar risco de interleaving em cenários de concurrent write.
+// [GEN-8 RT-205 FIX] Guarda contra uint16 overflow silencioso.
 func writeFramedPacket(conn net.Conn, packet []byte) error {
+	if len(packet) > MaxFramedPacketSize {
+		return fmt.Errorf("packet too large for framing: %d > %d", len(packet), MaxFramedPacketSize)
+	}
 	frame := make([]byte, 2+len(packet))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(packet)))
 	copy(frame[2:], packet)
@@ -242,12 +316,19 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 		return nil, false
 	}
 
+	// [GEN-8 RT-202 FIX] Verificar limite de entradas ANTES de inserir.
+	if atomic.LoadInt64(&nonceCacheCount) >= MaxNonceCacheEntries {
+		log.Println("[OMEGA-SECURITY] Nonce cache saturado. Rejeitando pacote para prevenir OOM.")
+		return nil, false
+	}
+
 	// [ENGULF-FIX VULN-3] SOMENTE após autenticação criptográfica, verificar replay no cache.
 	nonceStr := string(nonce)
 	if _, used := globalNonceCache.LoadOrStore(nonceStr, time.Now().Unix()); used {
 		log.Println("[OMEGA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
 		return nil, false
 	}
+	atomic.AddInt64(&nonceCacheCount, 1)
 
 	if isJitter {
 		return decrypted, true
@@ -350,7 +431,9 @@ func handleAlienConnection(alienConn net.Conn) {
 		// [RT-11 FIX] Contador de pacotes inválidos mid-stream
 		invalidCount := 0
 		for {
-			// [GEN-7] Removido o alienConn.SetReadDeadline(10s) massivo que quebrava WS.
+			// [GEN-8 RT-204 FIX] Idle timeout no mid-stream para prevenir goroutine exhaustion.
+			// Diferente do handshake (3s), este timeout é longo (120s) para suportar WS idle.
+			alienConn.SetReadDeadline(time.Now().Add(time.Duration(MidStreamIdleTimeoutSecs) * time.Second))
 			packet, err := readFramedPacket(alienConn)
 			if err != nil {
 				if err != io.EOF {
@@ -439,15 +522,15 @@ func extractIP(addr net.Addr) string {
 }
 
 func main() {
-	// Seed do PRNG para jitter anti-fingerprint
-	mrand.Seed(time.Now().UnixNano())
+	// [GEN-8 RT-213 FIX] Go 1.22+ usa auto-seeding. mrand.Seed() é deprecated.
+	_ = mrand.Intn(1) // Referência para manter import sem dead-code
 
 	// [RT-01 FIX] Cache do cipher AES e limpeza automática
 	_ = getAEAD()
 
-	// [GEN-6 RT-11 FIX] Banner sanitizado — sem revelar mecanismos de segurança.
+	// [GEN-8 RT-210 FIX] Banner sanitizado Gen-8.
 	fmt.Println("=================================================================")
-	fmt.Println(" [ CROM PROXY OMEGA (Gen-6 Hardened) ]")
+	fmt.Println(" [ CROM PROXY OMEGA (Gen-8 Hardened) ]")
 	fmt.Printf("  Escutando: %s | Backend: %s\n", SwarmListenAddr, BackendRealHost)
 	fmt.Println("=================================================================")
 

@@ -16,6 +16,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"runtime"
 	"runtime/debug"
@@ -27,11 +29,57 @@ const (
 
 	// [GEN-6 RT-06 FIX] Janela de drift máximo do timestamp autenticado (segundos)
 	MaxTimestampDriftSecs = 5
+
+	// [GEN-8 RT-202 FIX] Limite máximo de entradas no nonce cache para prevenir OOM.
+	MaxNonceCacheEntries = 100000
+
+	// [GEN-8 RT-204 FIX] Idle timeout para mid-stream reads (segundos).
+	MidStreamIdleTimeoutSecs = 120
+
+	// [GEN-8 RT-205 FIX] Tamanho máximo de pacote no framing.
+	MaxFramedPacketSize = 35000
 )
 
 // [GEN-7 RT-06 FIX] Seed agora é recebida apenas em bytes ou pipe para prevenir extração de strings (Memory Dump).
 var globalTenantSeedBytes []byte
 var seedMutex sync.Mutex
+
+// [GEN-8 RT-202 FIX] Contador atômico de entradas no nonce cache.
+var nonceCacheCount int64
+
+// [GEN-8 RT-208 FIX] KDF label ofuscada em byte-level para prevenir extração via strings.
+var kdfLabelObfuscated = []byte{
+	0x1a, 0x0b, 0x16, 0x14, 0x06, 0x18, 0x1c, 0x0a,
+	0x06, 0x1e, 0x1a, 0x14, 0x06, 0x12, 0x1c, 0x00,
+	0x06, 0x0f, 0x6d,
+}
+var kdfLabelXORKey = byte(0x59)
+
+func decodeKDFLabel() []byte {
+	out := make([]byte, len(kdfLabelObfuscated))
+	for i, b := range kdfLabelObfuscated {
+		out[i] = b ^ kdfLabelXORKey
+	}
+	return out
+}
+
+// [GEN-8 RT-203 FIX] Watchdog anti-debug contínuo.
+func startAntiDebugWatchdog() {
+	go func() {
+		for {
+			time.Sleep(500 * time.Millisecond)
+			status, err := os.ReadFile("/proc/self/status")
+			if err != nil {
+				continue
+			}
+			statusStr := string(status)
+			if strings.Contains(statusStr, "TracerPid:\t") &&
+				!strings.Contains(statusStr, "TracerPid:\t0") {
+				log.Fatal("[ALPHA-FATAL-DRM] ptrace() detectado em runtime. Abort imediato!")
+			}
+		}
+	}()
+}
 
 // SetTenantSeedBytes insere a seed de forma segura. O desenvolvedor deve zerar `seed` no seu array original após isso.
 func SetTenantSeedBytes(seed []byte) {
@@ -47,6 +95,12 @@ func SetTenantSeed(seed string) {
 }
 
 func secureReadSeedAndInitAEAD() cipher.AEAD {
+	// [GEN-8 RT-206 FIX] Bloquear /proc/PID/mem reads e core dumps.
+	_, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, 4, 0, 0)
+	if errno != 0 {
+		log.Printf("[ALPHA-SECURITY] Aviso: prctl(PR_SET_DUMPABLE,0) falhou: %v", errno)
+	}
+
 	// [GEN-7 DRM] Anti-Trace (TracerPid Check)
 	status, err := os.ReadFile("/proc/self/status")
 	if err == nil && strings.Contains(string(status), "TracerPid:\t") {
@@ -54,6 +108,9 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 			log.Fatal("[ALPHA-FATAL-DRM] ptrace() interceptado. Execução terminada para evitar Memory Dumps!")
 		}
 	}
+
+	// [GEN-8 RT-203 FIX] Iniciar watchdog contínuo
+	startAntiDebugWatchdog()
 
 	seedMutex.Lock()
 	defer seedMutex.Unlock()
@@ -66,7 +123,7 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 		// Prioridade 2: Ler seed via STDIN pipe
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) != 0 {
-			log.Fatal("[ALPHA-SECURITY] ⚠️ MODO INSEGURO DETECTADO. Sem globalTenantSeedBytes e sem STDIN pipe. Abortando.")
+			log.Fatal("[ALPHA-SECURITY] MODO INSEGURO DETECTADO. Sem globalTenantSeedBytes e sem STDIN pipe. Abortando.")
 		}
 
 		rawBytes := make([]byte, 1024)
@@ -96,9 +153,14 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 		log.Fatal("[ALPHA-FATAL] Nenhuma Seed válida fornecida.")
 	}
 
+	// [GEN-8 RT-208 FIX] Derivar AES key com label ofuscada.
+	kdfLabel := decodeKDFLabel()
 	mac := hmac.New(sha256.New, activeSeed)
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	mac.Write(kdfLabel)
 	key := mac.Sum(nil)
+
+	// [GEN-8] Zeroize label decodificada imediatamente
+	for i := range kdfLabel { kdfLabel[i] = 0 }
 
 	// [GEN-7 RT-01] Zeroize
 	for i := range activeSeed { activeSeed[i] = 0 }
@@ -116,11 +178,11 @@ func secureReadSeedAndInitAEAD() cipher.AEAD {
 		log.Fatalf("[ALPHA-FATAL] Falha no GCM: %v", err)
 	}
 
-	// [GEN-7] Força coleta de lixo da cópia do key state na lib crypto original
+	// [GEN-7] Força coleta de lixo
 	runtime.GC()
 	debug.FreeOSMemory()
 
-	log.Println("[ALPHA-SECURITY] KMS Inicializado e memória higienizada (Zeroize).")
+	log.Println("[ALPHA-SECURITY] KMS Armado. Runtime Zeroize concluído.")
 	return aead
 }
 
@@ -132,19 +194,24 @@ func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
 		globalAEAD = secureReadSeedAndInitAEAD()
 
-		// [ENGULF-FIX VULN-4] Janitor com TTL granular — limpa entradas individuais após 60s
+		// [GEN-8 RT-202 FIX] Janitor com TTL granular + limite de entradas.
 		go func() {
 			for {
 				time.Sleep(10 * time.Second)
 				now := time.Now().Unix()
+				var cleaned int64
 				globalNonceCache.Range(func(key, value interface{}) bool {
 					if ts, ok := value.(int64); ok {
 						if now-ts > 60 {
 							globalNonceCache.Delete(key)
+							cleaned++
 						}
 					}
 					return true
 				})
+				if cleaned > 0 {
+					atomic.AddInt64(&nonceCacheCount, -cleaned)
+				}
 			}
 		}()
 	})
@@ -168,9 +235,12 @@ func readFramedPacket(conn net.Conn) ([]byte, error) {
 	return packetBuf, nil
 }
 
-// [GEN-6 RT-05 FIX] Atomic write: combina length + payload em um único buffer
-// para eliminar risco de interleaving em cenários de concurrent write.
+// [GEN-6 RT-05 FIX] Atomic write: combina length + payload em um único buffer.
+// [GEN-8 RT-205 FIX] Guarda contra uint16 overflow silencioso.
 func writeFramedPacket(conn net.Conn, packet []byte) error {
+	if len(packet) > MaxFramedPacketSize {
+		return fmt.Errorf("packet too large for framing: %d > %d", len(packet), MaxFramedPacketSize)
+	}
 	frame := make([]byte, 2+len(packet))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(packet)))
 	copy(frame[2:], packet)
@@ -277,39 +347,47 @@ func cromDecryptPacket(packet []byte) []byte {
 		return nil
 	}
 
+	// [GEN-8 RT-202 FIX] Verificar limite de entradas ANTES de inserir.
+	if atomic.LoadInt64(&nonceCacheCount) >= MaxNonceCacheEntries {
+		log.Println("[ALPHA-SECURITY] Nonce cache saturado. Rejeitando pacote para prevenir OOM.")
+		return nil
+	}
+
 	// [ENGULF-FIX VULN-3] SOMENTE após autenticação criptográfica, verificar replay no cache.
 	nonceStr := string(nonce)
 	if _, used := globalNonceCache.LoadOrStore(nonceStr, time.Now().Unix()); used {
 		log.Println("[ALPHA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
 		return nil
 	}
+	atomic.AddInt64(&nonceCacheCount, 1)
 
 	// [ENGULF-FIX VULN-2] Payload transparente — sem expansão semântica cega
 	return decrypted
 }
 
-// [RT-04 FIX] startJitterCoverTraffic agora aceita context.Context para cancelamento.
-// Quando a conexão do cliente fechar, o context é cancelado e a goroutine termina.
-func startJitterCoverTraffic(ctx context.Context, swarmAddr string) {
+// [GEN-8 RT-207 FIX] Jitter agora é multiplexado na conexão Swarm existente.
+// Em vez de criar 1 conexão TCP por pacote (self-DoS), usa a conexão persistente.
+func startJitterCoverTraffic(ctx context.Context, swarmConn net.Conn, mu *sync.Mutex) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Conexão encerrada — parar a névoa criptográfica
 			return
-		// [GEN-6 RT-10 FIX] Jitter anti-fingerprinting: tempo aleatório entre 100ms e 500ms
 		case <-time.After(time.Duration(100+mrand.Intn(400)) * time.Millisecond):
-			conn, err := net.DialTimeout("tcp", swarmAddr, 500*time.Millisecond)
-			if err == nil {
-				// [GEN-6 RT-10 FIX] Tamanho aleatório entre 32 e 2048 bytes
-				fakeData := make([]byte, 32+mrand.Intn(2016))
-				// [RT-09 FIX] Checar erro do rand no jitter também
-				if _, randErr := io.ReadFull(rand.Reader, fakeData); randErr != nil {
-					conn.Close()
-					continue
-				}
-				jittPacket := cromEncrypt(fakeData, JitterMagic)
-				writeFramedPacket(conn, jittPacket)
-				conn.Close()
+			// [GEN-6 RT-10 FIX] Tamanho aleatório entre 32 e 2048 bytes
+			fakeData := make([]byte, 32+mrand.Intn(2016))
+			if _, randErr := io.ReadFull(rand.Reader, fakeData); randErr != nil {
+				continue
+			}
+			jittPacket := cromEncrypt(fakeData, JitterMagic)
+			if jittPacket == nil {
+				continue
+			}
+			// [GEN-8] Mutex para serializar writes na conexão compartilhada
+			mu.Lock()
+			err := writeFramedPacket(swarmConn, jittPacket)
+			mu.Unlock()
+			if err != nil {
+				return // Conexão morreu
 			}
 		}
 	}
@@ -346,12 +424,14 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 	defer swarmConn.Close()
 
 	// [RT-04 FIX] Criar context cancelável vinculado ao ciclo de vida da conexão.
-	// Quando handleClient() terminar (defer cancel()), a goroutine de jitter para.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Inicia a névoa! (agora com context para cancelamento limpo)
-	go startJitterCoverTraffic(ctx, swarmAddr)
+	// [GEN-8 RT-207 FIX] Mutex para serializar writes na conexão Swarm compartilhada.
+	var swarmWriteMu sync.Mutex
+
+	// Inicia a névoa multiplexada na conexão existente
+	go startJitterCoverTraffic(ctx, swarmConn, &swarmWriteMu)
 
 	var wg sync.WaitGroup
 
@@ -360,14 +440,17 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 		defer wg.Done()
 		buf := make([]byte, 32768)
 		for {
-			// [GEN-7] Retorno do timeout banido: mantendo TCP conexões websocket vivas.
 			n, err := clientConn.Read(buf)
 			if err != nil {
 				swarmConn.Close()
 				return
 			}
 			encrypted := cromEncrypt(buf[:n], CromMagic)
-			if err := writeFramedPacket(swarmConn, encrypted); err != nil {
+			// [GEN-8] Lock para serializar com Jitter
+			swarmWriteMu.Lock()
+			werr := writeFramedPacket(swarmConn, encrypted)
+			swarmWriteMu.Unlock()
+			if werr != nil {
 				return
 			}
 		}
@@ -378,7 +461,8 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 		defer wg.Done()
 		invalidCount := 0
 		for {
-			// [GEN-7] Retorno de timeout nocivo removido.
+			// [GEN-8 RT-204 FIX] Idle timeout mid-stream.
+			swarmConn.SetReadDeadline(time.Now().Add(time.Duration(MidStreamIdleTimeoutSecs) * time.Second))
 			packet, err := readFramedPacket(swarmConn)
 			if err != nil {
 				clientConn.Close()
