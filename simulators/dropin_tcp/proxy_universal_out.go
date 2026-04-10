@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +19,39 @@ import (
 const (
 	SwarmListenAddr = "127.0.0.1:9999"
 	BackendRealHost = "127.0.0.1:8080"
-	TenantSeed      = "CROM-SEC-TENANT-ALPHA-2026"
 	CromMagic       = "CROM"
 	JitterMagic     = "JITT"
+
+	// [RT-13 FIX] Limite máximo de conexões simultâneas para evitar FD exhaustion
+	MaxConcurrentConns = 2048
+
+	// [RT-11 FIX] Máximo de pacotes inválidos mid-stream antes de encerrar conexão
+	MaxInvalidMidStream = 5
 )
+
+// [RT-01 FIX] TenantSeed carregada de variável de ambiente em vez de hardcoded.
+// Se CROM_TENANT_SEED não estiver definida, usa fallback legado (com warning).
+var tenantSeed string
+
+func getTenantSeed() string {
+	if tenantSeed == "" {
+		envSeed := os.Getenv("CROM_TENANT_SEED")
+		if envSeed != "" {
+			tenantSeed = envSeed
+			log.Println("[OMEGA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+		} else {
+			log.Fatal("[OMEGA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
+		}
+	}
+	return tenantSeed
+}
+
+// [RT-10 FIX] hashAddr gera um hash truncado do endereço para logging seguro.
+// Impede que IPs de atacantes sejam logados em plaintext (OPSEC).
+func hashAddr(addr net.Addr) string {
+	h := sha256.Sum256([]byte(addr.String()))
+	return fmt.Sprintf("%x", h[:6])
+}
 
 // applyLLMSemanticExpansion reverte a lógica feita no Alpha.
 func applyLLMSemanticExpansion(data []byte) []byte {
@@ -50,7 +80,8 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	ciphertext := packet[4:]
 
 	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	// [RT-01 FIX] Usa getTenantSeed() que carrega de env var
+	mac := hmac.New(sha256.New, []byte(getTenantSeed()))
 	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
 	key := mac.Sum(nil) // 32 bytes = AES-256
 
@@ -97,7 +128,8 @@ func cromEncrypt(data []byte) []byte {
 	processedData := []byte(str)
 
 	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	mac := hmac.New(sha256.New, []byte(TenantSeed))
+	// [RT-01 FIX] Usa getTenantSeed()
+	mac := hmac.New(sha256.New, []byte(getTenantSeed()))
 	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
 	key := mac.Sum(nil) // 32 bytes = AES-256
 
@@ -113,7 +145,11 @@ func cromEncrypt(data []byte) []byte {
 	}
 
 	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
-	rand.Read(nonce)
+	// [RT-09 FIX] Checar retorno de rand.Read — nonce zero = catástrofe GCM
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		log.Printf("[OMEGA-CRYPTO-FATAL] Falha ao gerar nonce aleatório: %v", err)
+		return nil
+	}
 
 	// Seal: cifra + autentica. AAD (Additional Authenticated Data) = magic header
 	sealed := aesgcm.Seal(nil, nonce, processedData, []byte(CromMagic))
@@ -134,10 +170,10 @@ func handleAlienConnection(alienConn net.Conn) {
 	alienConn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	initialBuf := make([]byte, 32768)
 	n, err := alienConn.Read(initialBuf)
-	
+
 	// Limpar o deadline após o handshake para não afetar streams contínuos legítimos (como Chat/WebSocket)
 	alienConn.SetReadDeadline(time.Time{})
-	
+
 	if err != nil {
 		return
 	}
@@ -147,17 +183,19 @@ func handleAlienConnection(alienConn net.Conn) {
 	// Isso impede banner grabbing e information leakage.
 	plaintext, isJitt := cromDecryptPacket(initialBuf[:n])
 	if plaintext == nil {
-		log.Printf("[OMEGA-SILENT-DROP] Pacote inválido de %s (%d bytes). Dropped.", alienConn.RemoteAddr(), n)
+		// [RT-10 FIX] Hash do endereço nos logs para OPSEC
+		log.Printf("[OMEGA-SILENT-DROP] Pacote inválido de %s (%d bytes). Dropped.", hashAddr(alienConn.RemoteAddr()), n)
 		return
 	}
-	
+
 	if isJitt {
 		// Cover-Traffic cego P2P. Absorve a conexao sem mandar pro backend e encerra.
 		log.Printf("[OMEGA] JITTER Cover-Traffic Inicial Recebido (%d bytes). Absorvido.", n)
 		return
 	}
 
-	log.Printf("[OMEGA] Pacote CROM válido de %s (%d bytes)", alienConn.RemoteAddr(), len(plaintext))
+	// [RT-10 FIX] Hash do endereço
+	log.Printf("[OMEGA] Pacote CROM válido de %s (%d bytes)", hashAddr(alienConn.RemoteAddr()), len(plaintext))
 
 	// Conectar ao backend real
 	backendConn, err := net.Dial("tcp", BackendRealHost)
@@ -176,6 +214,8 @@ func handleAlienConnection(alienConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, 32768)
+		// [RT-11 FIX] Contador de pacotes inválidos mid-stream
+		invalidCount := 0
 		for {
 			rn, err := alienConn.Read(buf)
 			if err != nil {
@@ -187,9 +227,17 @@ func handleAlienConnection(alienConn net.Conn) {
 			}
 			pt, isJt := cromDecryptPacket(buf[:rn])
 			if pt == nil {
-				log.Printf("[OMEGA-SILENT-DROP] Pacote corrompido mid-stream. Dropped.")
+				// [RT-11 FIX] Fechar conexão após MaxInvalidMidStream pacotes inválidos consecutivos
+				invalidCount++
+				if invalidCount >= MaxInvalidMidStream {
+					log.Printf("[OMEGA-SECURITY] %d pacotes inválidos consecutivos mid-stream. Encerrando conexão.", invalidCount)
+					backendConn.Close()
+					return
+				}
+				log.Printf("[OMEGA-SILENT-DROP] Pacote corrompido mid-stream (%d/%d). Dropped.", invalidCount, MaxInvalidMidStream)
 				continue
 			}
+			invalidCount = 0 // Reset no sucesso
 			if isJt {
 				// Cover traffic, absorvido na rede mas nunca incomoda a CPU local
 				continue
@@ -227,9 +275,13 @@ func handleAlienConnection(alienConn net.Conn) {
 }
 
 func main() {
+	// [RT-01 FIX] Carregar seed na inicialização (dispara o warning se não definida)
+	seed := getTenantSeed()
+	_ = seed
+
 	fmt.Println("=================================================================")
-	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (v2 Full-Duplex + Silent Drop) ]")
-	fmt.Println(" Resolvendo poeira P2P com validação criptográfica HMAC")
+	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (v3 Hardened + Silent Drop) ]")
+	fmt.Println(" AES-256-GCM | Anti-Ptrace | Max-Conn Limiter | IP Hashing")
 	fmt.Println(" Escutando nuvem: localhost:9999 | Backend: localhost:8080")
 	fmt.Println("=================================================================")
 
@@ -237,11 +289,26 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// [RT-13 FIX] Semáforo de conexões máximas para prevenir FD exhaustion
+	connSemaphore := make(chan struct{}, MaxConcurrentConns)
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			continue
 		}
-		go handleAlienConnection(conn)
+
+		// [RT-13 FIX] Tentar adquirir slot. Se no limite, rejeitar silenciosamente.
+		select {
+		case connSemaphore <- struct{}{}:
+			go func() {
+				defer func() { <-connSemaphore }()
+				handleAlienConnection(conn)
+			}()
+		default:
+			// Limite de conexões atingido — silent drop
+			conn.Close()
+		}
 	}
 }

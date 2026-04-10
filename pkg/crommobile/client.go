@@ -1,28 +1,58 @@
 package crommobile
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	CromMagic    = "CROM"
-	JitterMagic  = "JITT"
+	CromMagic   = "CROM"
+	JitterMagic = "JITT"
 )
 
-var GlobalTenantSeed = "CROM-SEC-TENANT-ALPHA-2026"
+// [RT-06 FIX] Seed agora é unexported — nenhum package externo pode lê-la diretamente.
+// [RT-01 FIX] O valor padrão é vazio. A seed DEVE ser configurada via SetTenantSeed()
+//             ou via variável de ambiente CROM_TENANT_SEED antes de iniciar o túnel.
+var globalTenantSeed string
 
+// seedOnce garante que a configuração de fallback via env var aconteça apenas uma vez.
+var seedOnce sync.Once
+
+// GetTenantSeed retorna a seed configurada, com fallback para env var.
+// Se nenhuma fonte estiver disponível, usa o valor hardcoded legado (com warning).
+func GetTenantSeed() string {
+	seedOnce.Do(func() {
+		if globalTenantSeed == "" {
+			envSeed := os.Getenv("CROM_TENANT_SEED")
+			if envSeed != "" {
+				globalTenantSeed = envSeed
+				log.Println("[ALPHA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+			} else {
+				log.Fatal("[ALPHA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
+			}
+		}
+	})
+	return globalTenantSeed
+}
+
+// SetTenantSeed configura a seed do tenant. Deve ser chamada antes de StartTunnel().
 func SetTenantSeed(seed string) {
-	GlobalTenantSeed = seed
+	if seed == "" {
+		log.Fatal("[ALPHA-SECURITY] Tentativa de configurar TenantSeed vazia. Abortando.")
+	}
+	globalTenantSeed = seed
 }
 
 // applyLLMSemanticCompression simula a tese do crompressor-sinapse:
@@ -48,7 +78,8 @@ func cromEncrypt(data []byte, magic string) []byte {
 	}
 
 	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	mac := hmac.New(sha256.New, []byte(GlobalTenantSeed))
+	// [RT-01 FIX] Usa GetTenantSeed() que carrega de env var, não hardcode
+	mac := hmac.New(sha256.New, []byte(GetTenantSeed()))
 	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
 	key := mac.Sum(nil) // 32 bytes = AES-256
 
@@ -64,7 +95,11 @@ func cromEncrypt(data []byte, magic string) []byte {
 	}
 
 	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
-	rand.Read(nonce)
+	// [RT-09 FIX] Checar retorno de rand.Read — nonce zero = catástrofe criptográfica
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		log.Printf("[ALPHA-CRYPTO-FATAL] Falha ao gerar nonce aleatório: %v", err)
+		return nil
+	}
 
 	// Seal: cifra + autentica. AAD (Additional Authenticated Data) = magic header
 	sealed := aesgcm.Seal(nil, nonce, processedData, []byte(magic))
@@ -87,7 +122,8 @@ func cromDecryptPacket(packet []byte) []byte {
 	ciphertext := packet[4:]
 
 	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	mac := hmac.New(sha256.New, []byte(GlobalTenantSeed))
+	// [RT-01 FIX] Usa GetTenantSeed()
+	mac := hmac.New(sha256.New, []byte(GetTenantSeed()))
 	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
 	key := mac.Sum(nil) // 32 bytes = AES-256
 
@@ -124,17 +160,27 @@ func cromDecryptPacket(packet []byte) []byte {
 	return []byte(str)
 }
 
-// startJitterCoverTraffic injeta lixo criptografado na rede via conexoes pararelas cegas (Smoke screen)
-func startJitterCoverTraffic(swarmAddr string) {
+// [RT-04 FIX] startJitterCoverTraffic agora aceita context.Context para cancelamento.
+// Quando a conexão do cliente fechar, o context é cancelado e a goroutine termina.
+func startJitterCoverTraffic(ctx context.Context, swarmAddr string) {
 	for {
-		time.Sleep(300 * time.Millisecond) // Rajadas paraleas de fumaça
-		conn, err := net.Dial("tcp", swarmAddr)
-		if err == nil {
-			fakeData := make([]byte, 64)
-			rand.Read(fakeData)
-			jittPacket := cromEncrypt(fakeData, JitterMagic)
-			conn.Write(jittPacket)
-			conn.Close()
+		select {
+		case <-ctx.Done():
+			// Conexão encerrada — parar a névoa criptográfica
+			return
+		case <-time.After(300 * time.Millisecond):
+			conn, err := net.DialTimeout("tcp", swarmAddr, 500*time.Millisecond)
+			if err == nil {
+				fakeData := make([]byte, 64)
+				// [RT-09 FIX] Checar erro do rand no jitter também
+				if _, randErr := io.ReadFull(rand.Reader, fakeData); randErr != nil {
+					conn.Close()
+					continue
+				}
+				jittPacket := cromEncrypt(fakeData, JitterMagic)
+				conn.Write(jittPacket)
+				conn.Close()
+			}
 		}
 	}
 }
@@ -158,7 +204,7 @@ func StartTunnel(listenAddr string, swarmAddr string) error {
 
 func handleClient(clientConn net.Conn, swarmAddr string) {
 	defer clientConn.Close()
-	
+
 	swarmConn, err := net.Dial("tcp", swarmAddr)
 	if err != nil {
 		log.Printf("[CROM] Swarm Edge inacessível: %v", err)
@@ -166,8 +212,13 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 	}
 	defer swarmConn.Close()
 
-	// Inicia a névoa!
-	go startJitterCoverTraffic(swarmAddr)
+	// [RT-04 FIX] Criar context cancelável vinculado ao ciclo de vida da conexão.
+	// Quando handleClient() terminar (defer cancel()), a goroutine de jitter para.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Inicia a névoa! (agora com context para cancelamento limpo)
+	go startJitterCoverTraffic(ctx, swarmAddr)
 
 	var wg sync.WaitGroup
 

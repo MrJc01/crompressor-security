@@ -2,8 +2,8 @@
 # Suite 21: Private Brain System
 BIN="$(cd "$(dirname "$0")/../../test_suites/bin" && pwd)"
 REPORTS="$(cd "$(dirname "$0")/../reports" && pwd)"
-
 # Site PHP com dados sensíveis (porta 8080 - PRIVADA)
+export CROM_TENANT_SEED="CROM-SEC-TENANT-ALPHA-2026"
 python3 -c "
 import http.server, json
 class H(http.server.BaseHTTPRequestHandler):

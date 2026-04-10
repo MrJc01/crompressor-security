@@ -3,6 +3,7 @@
 # CROM-SECURITY MASTER AUDIT (20 SCENARIOS)
 # ==========================================
 set -e
+export CROM_TENANT_SEED="CROM-SEC-TENANT-ALPHA-2026"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
