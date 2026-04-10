@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -14,9 +13,7 @@ import (
 	mrand "math/rand"
 	"net"
 	"os"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -40,44 +37,62 @@ const (
 	MaxConnsPerIP = 10
 )
 
-// [RT-01 FIX] TenantSeed carregada de variável de ambiente em vez de hardcoded.
-// [GEN-6 RT-02 FIX] Prioridade: 1) STDIN pipe, 2) env var, 3) abort.
-// STDIN pipe NÃO expõe a seed em /proc/PID/environ (eliminando VULN-1 POSIX).
-var tenantSeed string
+// [GEN-7 RT-02 FIX] Seed não é mais mantida globalmente em string imutável.
+// Apenas a AEAD global será mantida em memória local, dificultando ptrace extraction.
 
-// [GEN-6 RT-08 FIX] Mapa atômico de contagem de conexões por IP.
-var perIPConns sync.Map // map[string]*int32
+// [GEN-7 RT-08 FIX] Bloqueio robusto anti-Race Condition (Mutex L4).
+var ipMutex sync.Mutex
+var perIPConns = make(map[string]int)
 
-func getTenantSeed() string {
-	if tenantSeed == "" {
-		// [GEN-6 RT-02] Prioridade 1: Ler seed via STDIN pipe (mais seguro)
-		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			// STDIN é um pipe, não terminal interativo
-			scanner := bufio.NewScanner(os.Stdin)
-			if scanner.Scan() {
-				stdinSeed := strings.TrimSpace(scanner.Text())
-				if stdinSeed != "" {
-					tenantSeed = stdinSeed
-					log.Println("[OMEGA-SECURITY] Seed carregada via STDIN pipe (segura — sem /proc/environ leak).")
-					return tenantSeed
-				}
-			}
-		}
+// secureReadSeed lê a chave de forma segura no startup e joga tudo para bytes apagáveis
+func secureReadSeedAndInitAEAD() cipher.AEAD {
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) != 0 {
+		log.Fatal("[OMEGA-SECURITY] ⚠️ MODO INSEGURO DETECTADO. Forneça a Seed de Tenant APENAS via STDIN pipe (echo SEED | proxy_out).")
+	}
 
-		// [GEN-6 RT-02] Prioridade 2: Fallback para env var (compatibilidade)
-		envSeed := os.Getenv("CROM_TENANT_SEED")
-		if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
-			tenantSeed = envSeed
-			log.Println("[OMEGA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
-			log.Println("[OMEGA-SECURITY] ⚠️  AVISO: Env vars ficam em /proc/PID/environ. Prefira STDIN pipe.")
-		} else if envSeed == "WIPED_BY_SEC_POLICY" || tenantSeed == "WIPED_BY_SEC_POLICY" {
-			// Vazio / memory secure
-		} else {
-			log.Fatal("[OMEGA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
+	rawBytes := make([]byte, 1024)
+	n, err := os.Stdin.Read(rawBytes)
+	if err != nil && err != io.EOF {
+		log.Fatal("[OMEGA-FATAL] Falha lendo pipe STDIN.")
+	}
+
+	// Localizar trim
+	seedBytes := rawBytes[:n]
+	var trimmed []byte
+	for _, b := range seedBytes {
+		if b >= 32 && b <= 126 {
+			trimmed = append(trimmed, b)
 		}
 	}
-	return tenantSeed
+
+	if len(trimmed) == 0 {
+		log.Fatal("[OMEGA-FATAL] Seed STDIN vazia.")
+	}
+
+	// [GEN-7] Derivar AES key IMEDIATAMENTE.
+	mac := hmac.New(sha256.New, trimmed)
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil)
+
+	// [GEN-7] MANUALLY ZERO THE SEED BUFFER AND RAW BYTES
+	for i := range trimmed { trimmed[i] = 0 }
+	for i := range rawBytes { rawBytes[i] = 0 }
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Fatalf("[OMEGA-FATAL] Falha no AES: %v", err)
+	}
+
+	// Zero key stack
+	for i := range key { key[i] = 0 }
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
+	}
+	log.Println("[OMEGA-SECURITY] Módulo KMS Criptográfico Armado. Limpeza de memória executada com sucesso (Runtime Zeroize).")
+	return aead
 }
 
 var globalAEAD cipher.AEAD
@@ -88,28 +103,9 @@ var globalNonceCache sync.Map
 
 func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
-		seed := getTenantSeed()
-		mac := hmac.New(sha256.New, []byte(seed))
-		mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-		key := mac.Sum(nil)
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			log.Fatalf("[OMEGA-FATAL] Falha no AES: %v", err)
-		}
-		globalAEAD, err = cipher.NewGCM(block)
-		if err != nil {
-			log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
-		}
-		// [RT-15 FIX] Memory Wipe of Env var
-		// [ENGULF-FIX VULN-1] ATENÇÃO: os.Setenv NÃO limpa /proc/PID/environ no Linux.
-		// Em produção, usar STDIN pipe ou Secret Manager (Vault) para injetar a seed.
-		// O snapshot original da env var permanece em /proc/PID/environ até o processo morrer.
-		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
-		log.Println("[OMEGA-SECURITY] ⚠️  AVISO: /proc/PID/environ pode ainda conter a seed original (limitação POSIX).")
-		tenantSeed = "WIPED_BY_SEC_POLICY"
+		globalAEAD = secureReadSeedAndInitAEAD()
 
 		// [ENGULF-FIX VULN-4] Janitor com TTL granular — limpa entradas individuais após 60s
-		// Em vez de purge total (que reabria a janela de Replay), cada nonce expira isoladamente.
 		go func() {
 			for {
 				time.Sleep(10 * time.Second)
@@ -188,17 +184,6 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	isJitter := magic == JitterMagic
 
 	// [ENGULF-FIX VULN-4] Extrair e validar Timestamp autenticado contra Replay Window
-	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
-	now := time.Now().Unix()
-	drift := now - packetTime
-	if drift < 0 {
-		drift = -drift
-	}
-	if drift > MaxTimestampDriftSecs {
-		log.Printf("[OMEGA-SECURITY] Pacote expirado (drift=%ds). Replay Window bloqueado.", drift)
-		return nil, false
-	}
-
 	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B] — ambos autenticados pelo GCM Tag
 	aad := packet[:12]
 	ciphertext := packet[12:]
@@ -217,6 +202,18 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	decrypted, err := aesgcm.Open(nil, nonce, sealed, aad)
 	if err != nil {
 		// GCM Authentication FALHOU: pacote forjado, corrompido ou com Seed errada
+		return nil, false
+	}
+
+	// [GEN-7 RT-03] Apenas desempacotar e avaliar lógicas L7 complexas (e Logs) SE O PACOTE FOR AUTÊNTICO.
+	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
+	now := time.Now().Unix()
+	drift := now - packetTime
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > MaxTimestampDriftSecs {
+		log.Printf("[OMEGA-SECURITY] Pacote autenticado expirado (drift=%ds). Replay Window bloqueado.", drift)
 		return nil, false
 	}
 
@@ -387,21 +384,23 @@ func handleAlienConnection(alienConn net.Conn) {
 
 // [GEN-6 RT-08 FIX] Helpers para tracking per-IP.
 func incrementIPConn(addr string) bool {
-	val, _ := perIPConns.LoadOrStore(addr, new(int32))
-	counter := val.(*int32)
-	if atomic.AddInt32(counter, 1) > MaxConnsPerIP {
-		atomic.AddInt32(counter, -1)
+	ipMutex.Lock()
+	defer ipMutex.Unlock()
+	
+	if perIPConns[addr] >= MaxConnsPerIP {
 		return false
 	}
+	perIPConns[addr]++
 	return true
 }
 
 func decrementIPConn(addr string) {
-	if val, ok := perIPConns.Load(addr); ok {
-		counter := val.(*int32)
-		if atomic.AddInt32(counter, -1) <= 0 {
-			perIPConns.Delete(addr)
-		}
+	ipMutex.Lock()
+	defer ipMutex.Unlock()
+	
+	perIPConns[addr]--
+	if perIPConns[addr] <= 0 {
+		delete(perIPConns, addr)
 	}
 }
 

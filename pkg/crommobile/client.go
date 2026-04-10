@@ -1,7 +1,6 @@
 package crommobile
 
 import (
-	"bufio"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -15,7 +14,6 @@ import (
 	mrand "math/rand"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -28,81 +26,89 @@ const (
 	MaxTimestampDriftSecs = 5
 )
 
-// [RT-06 FIX] Seed agora é unexported — nenhum package externo pode lê-la diretamente.
-// [RT-01 FIX] O valor padrão é vazio. A seed DEVE ser configurada via SetTenantSeed()
-//             ou via variável de ambiente CROM_TENANT_SEED antes de iniciar o túnel.
-var globalTenantSeed string
+// [GEN-7 RT-06 FIX] Seed agora é recebida apenas em bytes ou pipe para prevenir extração de strings (Memory Dump).
+var globalTenantSeedBytes []byte
+var seedMutex sync.Mutex
 
-// seedOnce garante que a configuração de fallback via env var aconteça apenas uma vez.
-var seedOnce sync.Once
+// SetTenantSeedBytes insere a seed de forma segura. O desenvolvedor deve zerar `seed` no seu array original após isso.
+func SetTenantSeedBytes(seed []byte) {
+	seedMutex.Lock()
+	defer seedMutex.Unlock()
+	globalTenantSeedBytes = make([]byte, len(seed))
+	copy(globalTenantSeedBytes, seed)
+}
 
-// GetTenantSeed retorna a seed configurada, com fallback para env var.
-// Se nenhuma fonte estiver disponível, usa o valor hardcoded legado (com warning).
-func GetTenantSeed() string {
-	seedOnce.Do(func() {
-		if globalTenantSeed == "" {
-			// [GEN-6 RT-02] Prioridade 1: Ler seed via STDIN pipe
-			stat, _ := os.Stdin.Stat()
-			if (stat.Mode() & os.ModeCharDevice) == 0 {
-				scanner := bufio.NewScanner(os.Stdin)
-				if scanner.Scan() {
-					stdinSeed := strings.TrimSpace(scanner.Text())
-					if stdinSeed != "" {
-						globalTenantSeed = stdinSeed
-						log.Println("[ALPHA-SECURITY] Seed carregada via STDIN pipe (segura — sem /proc/environ leak).")
-						return
-					}
-				}
-			}
+// Deprecated: SetTenantSeed is vulnerable to memory dumps because strings are immutable.
+func SetTenantSeed(seed string) {
+	SetTenantSeedBytes([]byte(seed))
+}
 
-			// [GEN-6 RT-02] Prioridade 2: Fallback para env var
-			envSeed := os.Getenv("CROM_TENANT_SEED")
-			if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
-				globalTenantSeed = envSeed
-				log.Println("[ALPHA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
-				log.Println("[ALPHA-SECURITY] ⚠️  AVISO: Env vars ficam em /proc/PID/environ. Prefira STDIN pipe.")
-			} else if envSeed == "WIPED_BY_SEC_POLICY" || globalTenantSeed == "WIPED_BY_SEC_POLICY" {
-				// Segura
-			} else {
-				log.Fatal("[ALPHA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
+func secureReadSeedAndInitAEAD() cipher.AEAD {
+	seedMutex.Lock()
+	defer seedMutex.Unlock()
+
+	var activeSeed []byte
+
+	if len(globalTenantSeedBytes) > 0 {
+		activeSeed = globalTenantSeedBytes
+	} else {
+		// Prioridade 2: Ler seed via STDIN pipe
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) != 0 {
+			log.Fatal("[ALPHA-SECURITY] ⚠️ MODO INSEGURO DETECTADO. Sem globalTenantSeedBytes e sem STDIN pipe. Abortando.")
+		}
+
+		rawBytes := make([]byte, 1024)
+		n, err := os.Stdin.Read(rawBytes)
+		if err != nil && err != io.EOF {
+			log.Fatal("[ALPHA-FATAL] Falha lendo pipe STDIN.")
+		}
+
+		for _, b := range rawBytes[:n] {
+			if b >= 32 && b <= 126 {
+				activeSeed = append(activeSeed, b)
 			}
 		}
-	})
-	return globalTenantSeed
+		// Zeroize STDIN
+		for i := range rawBytes { rawBytes[i] = 0 }
+	}
+
+	if len(activeSeed) == 0 {
+		log.Fatal("[ALPHA-FATAL] Nenhuma Seed válida fornecida.")
+	}
+
+	mac := hmac.New(sha256.New, activeSeed)
+	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+	key := mac.Sum(nil)
+
+	// [GEN-7 RT-01] Zeroize
+	for i := range activeSeed { activeSeed[i] = 0 }
+	globalTenantSeedBytes = nil
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Fatalf("[ALPHA-FATAL] Falha no AES: %v", err)
+	}
+
+	for i := range key { key[i] = 0 }
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Fatalf("[ALPHA-FATAL] Falha no GCM: %v", err)
+	}
+	log.Println("[ALPHA-SECURITY] KMS Inicializado e memória higienizada (Zeroize).")
+	return aead
 }
 
 var globalAEAD cipher.AEAD
 var onceAEAD sync.Once
-
-// [RT-17 FIX] Nonce Anti-Replay Map
 var globalNonceCache sync.Map
 
 func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
-		seed := GetTenantSeed()
-		if seed == "WIPED_BY_SEC_POLICY" {
-			log.Fatal("[ALPHA-FATAL] AEAD instanciado tarde demais, seed já apagada.")
-		}
-		mac := hmac.New(sha256.New, []byte(seed))
-		mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-		key := mac.Sum(nil)
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			log.Fatalf("[ALPHA-FATAL] Falha no AES: %v", err)
-		}
-		globalAEAD, err = cipher.NewGCM(block)
-		if err != nil {
-			log.Fatalf("[ALPHA-FATAL] Falha no GCM: %v", err)
-		}
-		// [ENGULF-FIX VULN-1] Zeroization -> Memory protect
-		// ATENÇÃO: os.Setenv NÃO limpa /proc/PID/environ no Linux.
-		// Em produção, usar STDIN pipe ou Secret Manager (Vault) para injetar a seed.
-		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
-		log.Println("[ALPHA-SECURITY] ⚠️  AVISO: /proc/PID/environ pode ainda conter a seed original (limitação POSIX).")
-		globalTenantSeed = "WIPED_BY_SEC_POLICY"
+		globalAEAD = secureReadSeedAndInitAEAD()
 
 		// [ENGULF-FIX VULN-4] Janitor com TTL granular — limpa entradas individuais após 60s
-		// Em vez de purge total (que reabria a janela de Replay), cada nonce expira isoladamente.
 		go func() {
 			for {
 				time.Sleep(10 * time.Second)
@@ -148,13 +154,7 @@ func writeFramedPacket(conn net.Conn, packet []byte) error {
 	return err
 }
 
-// SetTenantSeed configura a seed do tenant. Deve ser chamada antes de StartTunnel().
-func SetTenantSeed(seed string) {
-	if seed == "" {
-		log.Fatal("[ALPHA-SECURITY] Tentativa de configurar TenantSeed vazia. Abortando.")
-	}
-	globalTenantSeed = seed
-}
+// Removed duplicated SetTenantSeed
 
 // applyLLMSemanticCompression simula a tese do crompressor-sinapse:
 // [ENGULF-FIX VULN-2] DESATIVADA: A substituição cega de strings em payload TCP
@@ -210,18 +210,6 @@ func cromDecryptPacket(packet []byte) []byte {
 		return nil
 	}
 
-	// [ENGULF-FIX VULN-4] Extrair e validar Timestamp autenticado contra Replay Window
-	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
-	now := time.Now().Unix()
-	drift := now - packetTime
-	if drift < 0 {
-		drift = -drift
-	}
-	if drift > MaxTimestampDriftSecs {
-		log.Printf("[ALPHA-SECURITY] Pacote expirado (drift=%ds). Replay Window bloqueado.", drift)
-		return nil
-	}
-
 	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B]
 	aad := packet[:12]
 	ciphertext := packet[12:]
@@ -238,6 +226,18 @@ func cromDecryptPacket(packet []byte) []byte {
 	// [ENGULF-FIX VULN-3] PRIMEIRO validar AES-GCM. Nunca guardar estado de pacotes não-autenticados.
 	decrypted, err := aesgcm.Open(nil, nonce, sealed, aad)
 	if err != nil {
+		return nil
+	}
+
+	// [GEN-7 RT-03] Avaliar drift APÓS AEAD para não permitir Logs Forjados
+	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
+	now := time.Now().Unix()
+	drift := now - packetTime
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > MaxTimestampDriftSecs {
+		log.Printf("[ALPHA-SECURITY] Pacote autenticado expirado (drift=%ds). Replay Window bloqueado.", drift)
 		return nil
 	}
 
