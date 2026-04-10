@@ -1,10 +1,10 @@
-# 🛡️ Suíte de Batalha CROM: 01_routing_nominal
+# 🛡️ Suíte de Batalha CROM: 14_silent_drop_validation
 
 > **Status:** Parte Automática da Auditoria (As 23 Torres)
 > **Módulo:** Pentesting P2P
 
 ## 🔬 O que este teste prova?
-Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+O principal tesouro. Garante O(1) Time. Se eu chutar o servidor, o Firewall do GO derruba sem gastar CPU em resposta de `Erro HTTP 403`.
 
 ---
 

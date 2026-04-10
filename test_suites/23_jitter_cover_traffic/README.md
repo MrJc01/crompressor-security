@@ -1,10 +1,10 @@
-# 🛡️ Suíte de Batalha CROM: 01_routing_nominal
+# 🛡️ Suíte de Batalha CROM: 23_jitter_cover_traffic
 
 > **Status:** Parte Automática da Auditoria (As 23 Torres)
 > **Módulo:** Pentesting P2P
 
 ## 🔬 O que este teste prova?
-Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+O teste do Motor da Goroutine Anti-NSA. Garante que rajadas de tráfego de Lixo Hexadecimal (`JITT Magic Headers`) sejam identificadas na nuvem e Dropadas do canal principal sem interromper uma transação Web3 válida.
 
 ---
 

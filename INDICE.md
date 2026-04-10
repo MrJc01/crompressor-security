@@ -64,8 +64,32 @@ Nós recusamos a explicação puramente teórica. O diretório de simuladores é
 
 ## ⚔️ Auditório de Tormenta (`/test_suites`)
 
-Este é o local das nossas **21 Torres de Testes Automatizadas**. 
-Onde chamamos o arquivo raiz `master_audit.sh` para disparar os cenários de guerra:
+Este é o local das nossas **23 Torres de Testes Automatizadas**. Onde rodamos nosso arsenal na unha.
 
-*   **11 a 20**: Testamos sobrecargas via Chunking, *Sybil DDoS Swarm*, falência de sistema (Split Brain), e falsificações na Camada Osi.
-*   **[Suite 21 Especial: O Painel do Sistema Privado Local](test_suites/21_private_brain_system/README.md)**: A prova definitiva do **Silent Drop**. Testamos se um hacker com a porta crua mas sem a Seed é devidamente ignorado e aniquilado pelo Daemon sem respostas verbosas (Impedindo o *Banner Grabbing*).
+> **📍 [LER O GUIA DAS 23 TORRES: O QUE CADA TESTE FAZ](test_suites/GUIA_DAS_23_TORRES.md)**
+
+O arquivo raiz `master_audit.sh` executa todas as torres abaixo simultaneamente disparando cenários de guerra:
+
+*   **[01_routing_nominal](test_suites/01_routing_nominal/README.md)**: Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+*   **[02_pentest_mitm](test_suites/02_pentest_mitm/README.md)**: O Sniffer Alienígena da pasta tenta ler pedaços literais da memória. Falha graças ao XOR HMAC Mutante.
+*   **[03_pentest_dos_cannon](test_suites/03_pentest_dos_cannon/README.md)**: O Canhão dispara 500 conexões maliciosas por milissegundo no Omega. Testa a estabilidade do CPU.
+*   **[04_websocket_chat](test_suites/04_websocket_chat/README.md)**: Testa o "Full-Duplex" - bytes não empacotados em HTTP, mas sim uma tubulação TCP pura aberta eternamente rodando chat real-time.
+*   **[05_php_fpm_cgi](test_suites/05_php_fpm_cgi/README.md)**: FastCGI. Testa o envio de arrays `$_POST` massivos sendo reconstruídos corretamente antes do Apache.
+*   **[06_python_grpc](test_suites/06_python_grpc/README.md)**: Bufferização em Python. Streams binários HTTP/2 passando no CROM sem corromper pacotes.
+*   **[07_postgres_pgwire](test_suites/07_postgres_pgwire/README.md)**: Testa um Backend DB cru engolido (`psql` login). Valida pacotes de Autenticação do PostgreSQL que não possuem Header HTTP.
+*   **[08_redis_resp](test_suites/08_redis_resp/README.md)**: Engole o Redis Cache. Tráfego hiper-rápido operando em milissegundos sem adicionar latência perceptível (Overhead de Crypto = Zero).
+*   **[09_iot_mqtt_broker](test_suites/09_iot_mqtt_broker/README.md)**: Internet das coisas. Valida como dispositivos pequenos conseguem persistir ping-pong por trás do escudo.
+*   **[10_cplusplus_raw_tcp](test_suites/10_cplusplus_raw_tcp/README.md)**: Uma porta C++ pura. Nada de HTTP. Testa se o CROM destrói strings nulas (`\0`) que programadores C++ usam como EOF.
+*   **[11_large_payload_chunking](test_suites/11_large_payload_chunking/README.md)**: Envia um arquivo brutal de 50MB no terminal para forçar o GoLang Chunk size a quebrar e fatiar pacotes.
+*   **[12_high_concurrency](test_suites/12_high_concurrency/README.md)**: Não é o canhão, mas sim milhares de clientes legítimos (Alphas validos com senha) usando a tubulação simultaneamente `Goroutines`.
+*   **[13_sybil_swarm_attack](test_suites/13_sybil_swarm_attack/README.md)**: Um enxame de mil Scanners usando chaves erradas por um Cópia mal feita do software para ver se dá Memory Leak por log excessivo.
+*   **[14_silent_drop_validation](test_suites/14_silent_drop_validation/README.md)**: O principal tesouro. Garante O(1) Time. Se eu chutar o servidor, o Firewall do GO derruba sem gastar CPU em resposta de `Erro HTTP 403`.
+*   **[15_split_brain_recovery](test_suites/15_split_brain_recovery/README.md)**: Derruba o Servidor CROM da porta e religa. O Alpha do cliente precisa saber reestabelecer o TCP Handshake sozinho.
+*   **[16_nodejs_express_rest](test_suites/16_nodejs_express_rest/README.md)**: Testa envios JSON massivos com Headers variados (onde a Compressão LLM nativa do Gen-3 prova valor esmagando os atributos longos atômicos).
+*   **[17_java_spring_boot_xml](test_suites/17_java_spring_boot_xml/README.md)**: O terror do mundo das empresas. Envia SOAP/XML via CROM. O Parser deve conseguir transitar intacto.
+*   **[18_dns_hijack_spoofing](test_suites/18_dns_hijack_spoofing/README.md)**: Tentativa de passar Cabeçalhos de HOST falsificados dizendo estar em IP da intranet local.
+*   **[19_payload_forgery](test_suites/19_payload_forgery/README.md)**: O Alien Sniffer intercepta o tráfego da rede, altera o último byte de uma senha Criptografada e tenta enviar pro Omega. O HMAC rejeita o pacote pela Checksum.
+*   **[20_vfs_fd_exhaust](test_suites/20_vfs_fd_exhaust/README.md)**: Esgotamento de `File Descriptors`. Força o Linux ao talo para tentar *Crashar* o serviço de borda.
+*   **[21_private_brain_system](test_suites/21_private_brain_system/README.md)**: Consolidou a tese do sistema privado, que nem sequer usa o framework clássico da empresa, fechando tráfego num loopback escuro invisível.
+*   **[22_onion_multi_hop_route](test_suites/22_onion_multi_hop_route/README.md)**: Testa o repasse cebola cego. Um novo binário `proxy_onion_relay` repassa Sockets Alpha de um computador para o outro validando Dark Routing.
+*   **[23_jitter_cover_traffic](test_suites/23_jitter_cover_traffic/README.md)**: O teste do Motor da Goroutine Anti-NSA. Garante que rajadas de tráfego de Lixo Hexadecimal (`JITT Magic Headers`) sejam identificadas na nuvem e Dropadas do canal principal sem interromper uma transação Web3 válida.

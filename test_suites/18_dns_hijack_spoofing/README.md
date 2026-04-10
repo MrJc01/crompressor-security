@@ -1,10 +1,10 @@
-# 🛡️ Suíte de Batalha CROM: 01_routing_nominal
+# 🛡️ Suíte de Batalha CROM: 18_dns_hijack_spoofing
 
 > **Status:** Parte Automática da Auditoria (As 23 Torres)
 > **Módulo:** Pentesting P2P
 
 ## 🔬 O que este teste prova?
-Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+Tentativa de passar Cabeçalhos de HOST falsificados dizendo estar em IP da intranet local.
 
 ---
 

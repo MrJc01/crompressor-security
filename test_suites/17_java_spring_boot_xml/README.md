@@ -1,10 +1,10 @@
-# 🛡️ Suíte de Batalha CROM: 01_routing_nominal
+# 🛡️ Suíte de Batalha CROM: 17_java_spring_boot_xml
 
 > **Status:** Parte Automática da Auditoria (As 23 Torres)
 > **Módulo:** Pentesting P2P
 
 ## 🔬 O que este teste prova?
-Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+O terror do mundo das empresas. Envia SOAP/XML via CROM. O Parser deve conseguir transitar intacto.
 
 ---
 

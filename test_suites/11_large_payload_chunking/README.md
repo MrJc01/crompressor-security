@@ -1,10 +1,10 @@
-# 🛡️ Suíte de Batalha CROM: 01_routing_nominal
+# 🛡️ Suíte de Batalha CROM: 11_large_payload_chunking
 
 > **Status:** Parte Automática da Auditoria (As 23 Torres)
 > **Módulo:** Pentesting P2P
 
 ## 🔬 O que este teste prova?
-Verifica se A consegue empacotar Bytes, enviar para B e sair limpo do outro lado da Nuvem.
+Envia um arquivo brutal de 50MB no terminal para forçar o GoLang Chunk size a quebrar e fatiar pacotes.
 
 ---
 
