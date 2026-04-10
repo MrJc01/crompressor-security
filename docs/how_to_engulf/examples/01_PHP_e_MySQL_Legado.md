@@ -39,17 +39,18 @@ server {
 ```
 *Reinicie o NGINX.* A partir daqui sua empresa estaria tecnicamente "*offline*" e segura até contra varredura militar.
 
-### 2. Implantando o Mestre Omega na Porta Extrovertida (Drop-In)
-Na mesma máquina onde seu NGINX acabou de ser isolado do mundo, rode (ou transforme em SystemD service):
+### 2. O Deployment Oficial do Cérebro Omega
+Esqueça rodar comandos em background e configurar variáveis de ambiente à mão como fazíamos antes! No ecossistema de infraestrutura Gen-3 do CROM criamos a suíte SystemD:
 
+Na máquina Linux onde seu Servidor web está, chame:
 ```bash
-# Sobe o proxy_out na porta original da internet e reflete entropia na 8080
-export SWARM_LISTEN="0.0.0.0:80"        # Porta exposta fisicamente ao router / internet
-export BACKEND_TARGET="127.0.0.1:8080"  # O cofre privado local do Nginx
-export TENANT_SEED="SECRET_DA_SUA_EMPRESA" 
-
-./proxy_universal_out
+sudo bash scripts/deploy_omega_server.sh
 ```
+Ao preencher a porta alvo (ex: 8080) e a "Tenant Seed" da sua empresa, o script magicamente criará um serviço no próprio núcleo do seu servidor e ativará ele cravando na porta exposta. Um milissegundo de tempo.
+
+### 3. Governando tudo Pelo TUI Terminal
+E caso o ataque engrosse? Nós construímos um poderoso Dashboard Interativo em `Bash / ANSI`. 
+Basta rodar `sudo bash scripts/crom_master_dashboard.sh`. A tela gráfica lhe dará controle total para Listar Cérebro, ver os logs Forenses ao vivo, e derrubá-los em meio às Mutações Táticas.
 
 ### 3. Acesso Seguro Pelos Funcionários / Browser Alpha
 Apenas clientes (usuários) que passarem fisicamente pela sua versão compilada do **browser WASM CROM**, ou que tenham instalado um Desktop Worker CROM ouvindo sua seed, poderão acessar sua Intranet PHP.

@@ -24,6 +24,9 @@ server.port=8080
 ```
 Nenhum atacante sem Seed CROM consegue interagir com a JVM (eliminando riscos gravíssimos tipo Apache Log4j e vulnerabilidades JNDI RCE, já que as injeções cruas morrem silenciosamente no *Silent Drop* do Proxy antes de encostarem na máquina Java Tomcat).
 
+#### A Escalabilidade pra Multi-Hop (Rede Cebola)
+Corporações Gigantes de Cartões e Banco Central rodam centenas de APIs Java num cluster, muitas vezes precisando repassar transações pra matriz em outro País. Se os diretores usarem o Alpha com a **Onion Mixnet** (`proxy_onion_relay`), a transação do banco pode rebater em Nova York antes de cair no OMEGA do Java Tomcat no Chile. Nenhuma agência de vigilância saberá a quem pertence aqueles Bytes! Procure pelo Dashboard TUI para operar esses roteadores na aba de utilidades SysAdmin.
+
 ## Benefícios de Banco de Dados Stateful
 
 Grandes infraestruturas costumam ter Workers Java de longa-duração rodando Redis Clusters e JDBC/Hibernate segurando conexões PostgreSQL. Quando essas ferramentas fluem atrás de Cérebro CROM, todas as quebras habituais de proxy Nginx reverso mal-configurado (Timeout em conexões Keep-Alive longas) somem.
