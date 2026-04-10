@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -36,14 +37,64 @@ var tenantSeed string
 func getTenantSeed() string {
 	if tenantSeed == "" {
 		envSeed := os.Getenv("CROM_TENANT_SEED")
-		if envSeed != "" {
+		if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
 			tenantSeed = envSeed
 			log.Println("[OMEGA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+		} else if envSeed == "WIPED_BY_SEC_POLICY" || tenantSeed == "WIPED_BY_SEC_POLICY" {
+			// Vazio / memory secure
 		} else {
 			log.Fatal("[OMEGA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
 		}
 	}
 	return tenantSeed
+}
+
+var globalAEAD cipher.AEAD
+var onceAEAD sync.Once
+
+func getAEAD() cipher.AEAD {
+	onceAEAD.Do(func() {
+		seed := getTenantSeed()
+		mac := hmac.New(sha256.New, []byte(seed))
+		mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+		key := mac.Sum(nil)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			log.Fatalf("[OMEGA-FATAL] Falha no AES: %v", err)
+		}
+		globalAEAD, err = cipher.NewGCM(block)
+		if err != nil {
+			log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
+		}
+		// [RT-15 FIX] Memory Wipe of Env var
+		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
+		tenantSeed = "WIPED_BY_SEC_POLICY"
+	})
+	return globalAEAD
+}
+
+// [RT-14 FIX] TCP Length-Prefix Framing
+func readFramedPacket(conn net.Conn) ([]byte, error) {
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, err
+	}
+	packetLen := binary.BigEndian.Uint16(lenBuf)
+	packetBuf := make([]byte, packetLen)
+	if _, err := io.ReadFull(conn, packetBuf); err != nil {
+		return nil, err
+	}
+	return packetBuf, nil
+}
+
+func writeFramedPacket(conn net.Conn, packet []byte) error {
+	lenBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(lenBuf, uint16(len(packet)))
+	if _, err := conn.Write(lenBuf); err != nil {
+		return err
+	}
+	_, err := conn.Write(packet)
+	return err
 }
 
 // [RT-10 FIX] hashAddr gera um hash truncado do endereço para logging seguro.
@@ -79,20 +130,7 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	isJitter := magic == JitterMagic
 	ciphertext := packet[4:]
 
-	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	// [RT-01 FIX] Usa getTenantSeed() que carrega de env var
-	mac := hmac.New(sha256.New, []byte(getTenantSeed()))
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-	key := mac.Sum(nil) // 32 bytes = AES-256
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, false
-	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, false
-	}
+	aesgcm := getAEAD()
 
 	nonceSize := aesgcm.NonceSize() // 12 bytes padrão
 	if len(ciphertext) < nonceSize {
@@ -127,22 +165,7 @@ func cromEncrypt(data []byte) []byte {
 	str = strings.ReplaceAll(str, "User-Agent", "⌬UA")
 	processedData := []byte(str)
 
-	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	// [RT-01 FIX] Usa getTenantSeed()
-	mac := hmac.New(sha256.New, []byte(getTenantSeed()))
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-	key := mac.Sum(nil) // 32 bytes = AES-256
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		log.Printf("[OMEGA-CRYPTO] Falha ao criar cifra AES: %v", err)
-		return nil
-	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		log.Printf("[OMEGA-CRYPTO] Falha ao criar GCM: %v", err)
-		return nil
-	}
+	aesgcm := getAEAD()
 
 	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
 	// [RT-09 FIX] Checar retorno de rand.Read — nonce zero = catástrofe GCM
@@ -165,11 +188,10 @@ func cromEncrypt(data []byte) []byte {
 func handleAlienConnection(alienConn net.Conn) {
 	defer alienConn.Close()
 
-	// Ler o primeiro chunk para validar se é um pacote CROM válido
+	// Ler o prefixo TCP Framer para lidar com desincronização em stream TCP (Nagle)
 	// Prevenção inteligente contra Slowloris: Timeout de 3s na borda L4
 	alienConn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	initialBuf := make([]byte, 32768)
-	n, err := alienConn.Read(initialBuf)
+	initialPacket, err := readFramedPacket(alienConn)
 
 	// Limpar o deadline após o handshake para não afetar streams contínuos legítimos (como Chat/WebSocket)
 	alienConn.SetReadDeadline(time.Time{})
@@ -181,7 +203,8 @@ func handleAlienConnection(alienConn net.Conn) {
 	// ===== SILENT DROP =====
 	// Se o pacote não tem a assinatura CROM, fechar a conexão sem responder NADA.
 	// Isso impede banner grabbing e information leakage.
-	plaintext, isJitt := cromDecryptPacket(initialBuf[:n])
+	plaintext, isJitt := cromDecryptPacket(initialPacket)
+	n := len(initialPacket)
 	if plaintext == nil {
 		// [RT-10 FIX] Hash do endereço nos logs para OPSEC
 		log.Printf("[OMEGA-SILENT-DROP] Pacote inválido de %s (%d bytes). Dropped.", hashAddr(alienConn.RemoteAddr()), n)
@@ -213,11 +236,10 @@ func handleAlienConnection(alienConn net.Conn) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32768)
 		// [RT-11 FIX] Contador de pacotes inválidos mid-stream
 		invalidCount := 0
 		for {
-			rn, err := alienConn.Read(buf)
+			packet, err := readFramedPacket(alienConn)
 			if err != nil {
 				if err != io.EOF {
 					log.Printf("[OMEGA] Alien read err: %v", err)
@@ -225,7 +247,7 @@ func handleAlienConnection(alienConn net.Conn) {
 				backendConn.Close()
 				return
 			}
-			pt, isJt := cromDecryptPacket(buf[:rn])
+			pt, isJt := cromDecryptPacket(packet)
 			if pt == nil {
 				// [RT-11 FIX] Fechar conexão após MaxInvalidMidStream pacotes inválidos consecutivos
 				invalidCount++
@@ -264,7 +286,7 @@ func handleAlienConnection(alienConn net.Conn) {
 				return
 			}
 			encrypted := cromEncrypt(buf[:rn])
-			_, werr := alienConn.Write(encrypted)
+			werr := writeFramedPacket(alienConn, encrypted)
 			if werr != nil {
 				return
 			}
@@ -275,9 +297,8 @@ func handleAlienConnection(alienConn net.Conn) {
 }
 
 func main() {
-	// [RT-01 FIX] Carregar seed na inicialização (dispara o warning se não definida)
-	seed := getTenantSeed()
-	_ = seed
+	// [RT-01 FIX] Cache do cipher AES e limpeza automática
+	_ = getAEAD()
 
 	fmt.Println("=================================================================")
 	fmt.Println(" [ CROM ALIEN PROXY OUT-FLIGHT (v3 Hardened + Silent Drop) ]")

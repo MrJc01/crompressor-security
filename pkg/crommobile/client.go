@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -36,15 +37,68 @@ func GetTenantSeed() string {
 	seedOnce.Do(func() {
 		if globalTenantSeed == "" {
 			envSeed := os.Getenv("CROM_TENANT_SEED")
-			if envSeed != "" {
+			if envSeed != "" && envSeed != "WIPED_BY_SEC_POLICY" {
 				globalTenantSeed = envSeed
 				log.Println("[ALPHA-SECURITY] Seed carregada via CROM_TENANT_SEED env var.")
+			} else if envSeed == "WIPED_BY_SEC_POLICY" || globalTenantSeed == "WIPED_BY_SEC_POLICY" {
+				// Segura
 			} else {
 				log.Fatal("[ALPHA-SECURITY] ⚠️  CROM_TENANT_SEED não definida. Abortando.")
 			}
 		}
 	})
 	return globalTenantSeed
+}
+
+var globalAEAD cipher.AEAD
+var onceAEAD sync.Once
+
+func getAEAD() cipher.AEAD {
+	onceAEAD.Do(func() {
+		seed := GetTenantSeed()
+		if seed == "WIPED_BY_SEC_POLICY" {
+			log.Fatal("[ALPHA-FATAL] AEAD instanciado tarde demais, seed já apagada.")
+		}
+		mac := hmac.New(sha256.New, []byte(seed))
+		mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
+		key := mac.Sum(nil)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			log.Fatalf("[ALPHA-FATAL] Falha no AES: %v", err)
+		}
+		globalAEAD, err = cipher.NewGCM(block)
+		if err != nil {
+			log.Fatalf("[ALPHA-FATAL] Falha no GCM: %v", err)
+		}
+		// Zeroization -> Memory protect
+		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
+		globalTenantSeed = "WIPED_BY_SEC_POLICY"
+	})
+	return globalAEAD
+}
+
+// [RT-14 FIX] TCP Length-Prefix Framing
+func readFramedPacket(conn net.Conn) ([]byte, error) {
+	lenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, err
+	}
+	packetLen := binary.BigEndian.Uint16(lenBuf)
+	packetBuf := make([]byte, packetLen)
+	if _, err := io.ReadFull(conn, packetBuf); err != nil {
+		return nil, err
+	}
+	return packetBuf, nil
+}
+
+func writeFramedPacket(conn net.Conn, packet []byte) error {
+	lenBuf := make([]byte, 2)
+	binary.BigEndian.PutUint16(lenBuf, uint16(len(packet)))
+	if _, err := conn.Write(lenBuf); err != nil {
+		return err
+	}
+	_, err := conn.Write(packet)
+	return err
 }
 
 // SetTenantSeed configura a seed do tenant. Deve ser chamada antes de StartTunnel().
@@ -77,23 +131,7 @@ func cromEncrypt(data []byte, magic string) []byte {
 		processedData = data
 	}
 
-	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	// [RT-01 FIX] Usa GetTenantSeed() que carrega de env var, não hardcode
-	mac := hmac.New(sha256.New, []byte(GetTenantSeed()))
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-	key := mac.Sum(nil) // 32 bytes = AES-256
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		log.Printf("[ALPHA-CRYPTO] Falha ao criar cifra AES: %v", err)
-		return nil
-	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		log.Printf("[ALPHA-CRYPTO] Falha ao criar GCM: %v", err)
-		return nil
-	}
-
+	aesgcm := getAEAD()
 	nonce := make([]byte, aesgcm.NonceSize()) // 12 bytes
 	// [RT-09 FIX] Checar retorno de rand.Read — nonce zero = catástrofe criptográfica
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -121,21 +159,7 @@ func cromDecryptPacket(packet []byte) []byte {
 	}
 	ciphertext := packet[4:]
 
-	// Derivar chave AES-256 via HMAC-SHA256 da TenantSeed
-	// [RT-01 FIX] Usa GetTenantSeed()
-	mac := hmac.New(sha256.New, []byte(GetTenantSeed()))
-	mac.Write([]byte("CROM_AES_GCM_KEY_V4"))
-	key := mac.Sum(nil) // 32 bytes = AES-256
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil
-	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil
-	}
-
+	aesgcm := getAEAD()
 	nonceSize := aesgcm.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return nil
@@ -178,7 +202,7 @@ func startJitterCoverTraffic(ctx context.Context, swarmAddr string) {
 					continue
 				}
 				jittPacket := cromEncrypt(fakeData, JitterMagic)
-				conn.Write(jittPacket)
+				writeFramedPacket(conn, jittPacket)
 				conn.Close()
 			}
 		}
@@ -187,6 +211,9 @@ func startJitterCoverTraffic(ctx context.Context, swarmAddr string) {
 
 // StartTunnel exportado para SDK iOS/Android via GoMobile
 func StartTunnel(listenAddr string, swarmAddr string) error {
+	// [RT-01 FIX] Force cache init to prevent memory leak
+	_ = getAEAD()
+
 	l, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
@@ -233,8 +260,7 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 				return
 			}
 			encrypted := cromEncrypt(buf[:n], CromMagic)
-			_, werr := swarmConn.Write(encrypted)
-			if werr != nil {
+			if err := writeFramedPacket(swarmConn, encrypted); err != nil {
 				return
 			}
 		}
@@ -243,14 +269,13 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32768)
 		for {
-			n, err := swarmConn.Read(buf)
+			packet, err := readFramedPacket(swarmConn)
 			if err != nil {
 				clientConn.Close()
 				return
 			}
-			plaintext := cromDecryptPacket(buf[:n])
+			plaintext := cromDecryptPacket(packet)
 			if plaintext == nil {
 				continue
 			}
