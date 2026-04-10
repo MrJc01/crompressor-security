@@ -11,9 +11,10 @@ Este documento é a sua bússola.
 
 Se você é novo no conceito da arquitetura CROM (ou está tentando entender como "engolimos" sistemas inteiros), recomendamos veementemente ler **na ordem exata abaixo**:
 
-1. **[Relatório de Análise Final](docs/00_REPORT_ANALISE_FINAL.md)**: A introdução filosófica e teórica ao Cérebro e ao Virtual File System (VFS).
-2. **[Guia Master: Drop-In Proxy e Segredos do Englobamento](docs/how_to_engulf/GUIDE_MASTER.md)**: Como, tecnicamente, injetamos a nuvem P2P nativa e bloqueamos o mundo de acessar suas portas expostas. Mágica pura com `127.0.0.1`.
-3. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo. Os resultados de nossas 21 baterias simultâneas confirmando a completa opacidade da Mixnet (incluindo falhas antigas que consertamos).
+1. **[Manual Mestre de Operação Prática](docs/MANUAL_DE_OPERACAO.md)**: Comece por aqui se só quer aprender a instalar cérebros, plugar o dashboard CLI e usar a infraestrutura no dia 1 sem teoria inútil.
+2. **[Relatório de Análise Final (A Teoria Base)](docs/00_REPORT_ANALISE_FINAL.md)**: A introdução filosófica e teórica ao Cérebro e ao Virtual File System (VFS).
+3. **[Guia Master: Drop-In Proxy e Segredos do Englobamento](docs/how_to_engulf/GUIDE_MASTER.md)**: Como, tecnicamente, injetamos a nuvem P2P nativa e bloqueamos o mundo de acessar suas portas expostas.
+4. **[O Relatório Pentest Completo (v2)](docs/05_RELATORIO_PENTEST_COMPLETO.md)**: A prova de fogo e auditoria de 23 falhas de guerra superadas pela criptografia XOR P2P Orgânica.
 
 *(Sente-se familiarizado com a teoria acima? Prossiga para os Laboratórios Práticos abaixo.)*
 
@@ -35,11 +36,18 @@ Aqui estão armazenadas as teses e estudos aprofundados sobre os quatro pilares 
 
 ## 🛠️ O Hub de Englobamento Prático (Cenários Reais)
 
-Mostramos a Devs e SREs corporativos como aplicar a **Engenharia SecOps CROM** e plugar nosso Cérebro Omega nos 3 sistemas mais frágeis da era moderna.
+Mostramos a Devs e SREs corporativos como aplicar a **Engenharia SecOps CROM** e plugar nosso Cérebro Omega nos sistemas mais frágeis da era moderna.
 
+### 🚀 Instaladores e Ferramentas Práticas
+*   📌 **[Painel Interativo de Terminal (TUI)](scripts/crom_master_dashboard.sh)**: A Central de Comando CROM. Administre conexões vivas, veja logs e edite túneis direto num menu de bash rápido (`./scripts/crom_master_dashboard.sh`).
+*   📌 **[Instalador Nativo SystemD do Cérebro](scripts/deploy_omega_server.sh)**: Automatize a blindagem completa do seu Linux.
+*   📌 **[Laboratórios Acionáveis Visuais](docs/how_to_engulf/runnable_labs/)**: Não só leia, execute. Simulações em tela com Pings.
+
+### 🌐 Guias Stacks e Web3
 *   📌 **[Cenário A: PHP Limpo + MySQL Antigo](docs/how_to_engulf/examples/01_PHP_e_MySQL_Legado.md)**
 *   📌 **[Cenário B: Node.js, Banco de React SPA e Redis](docs/how_to_engulf/examples/02_Node_React_Redis.md)**
 *   📌 **[Cenário C: Java Spring Boot O(1) e Arquivos SOAP Monstruosos](docs/how_to_engulf/examples/03_Java_SpringBoot_Corporativo.md)**
+*   📌 **[Cenário Web3: Blindando DApps, IPFS, Geth e Redes DeFi p/ Block de MEVs](docs/how_to_engulf/examples/04_Web3_Blockchain_DApps.md)**
 
 ---
 

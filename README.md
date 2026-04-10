@@ -24,3 +24,14 @@ Executamos `master_audit.sh` testando o Cérebro Injetado na defesa contra simul
 ![Vitória Absoluta](https://img.shields.io/badge/VULNERABILIDADES_LOCAIS-0-brightgreen.svg) ![Arquitetura P2P](https://img.shields.io/badge/DROP--IN_PROXY-WASM_READY-blue.svg)
 
 > **Nota para SREs e Pentesters:** Todo nosso P&D em cima da criptografia do `proxy_universal_in` e `out` em Go está detalhado na seção **O Relatório Pentest** via `INDICE.md`. Use-o com sabedoria!
+
+---
+
+## 🚀 Como Aplicar o CROM na Prática (Instalação Sysadmin)
+Desenvolvemos uma Suíte Especial para **Englobamento Web3 e Legado**, contendo Laboratórios Interativos e o **Script Oficial de Instalador** que forja o binário CROM direto no SystemD do seu Linux:
+```bash
+# Execute na raiz para cercar seu Web Server ou Geth Node:
+./scripts/deploy_omega_server.sh
+```
+
+Navegue pro [Índice Principal](INDICE.md) na Sessão de "Como Engolir o Mundo" para explorar a defesa de Nodes Web3 e DApps Contra Bots MEV, usando nossa nova infraestrutura Jitter.
