@@ -12,7 +12,7 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings"
+
 	"sync"
 	"time"
 )
@@ -70,16 +70,25 @@ func getAEAD() cipher.AEAD {
 			log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
 		}
 		// [RT-15 FIX] Memory Wipe of Env var
-		// ATENÇÃO: os.Setenv NÃO limpa /proc/PID/environ no Linux - Vulnerabilidade de SO mantida explícita no log.
+		// [ENGULF-FIX VULN-1] ATENÇÃO: os.Setenv NÃO limpa /proc/PID/environ no Linux.
+		// Em produção, usar STDIN pipe ou Secret Manager (Vault) para injetar a seed.
+		// O snapshot original da env var permanece em /proc/PID/environ até o processo morrer.
 		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
+		log.Println("[OMEGA-SECURITY] ⚠️  AVISO: /proc/PID/environ pode ainda conter a seed original (limitação POSIX).")
 		tenantSeed = "WIPED_BY_SEC_POLICY"
 
-		// Inicializa Janitor para Anti-Replay cache
+		// [ENGULF-FIX VULN-4] Janitor com TTL granular — limpa entradas individuais após 60s
+		// Em vez de purge total (que reabria a janela de Replay), cada nonce expira isoladamente.
 		go func() {
 			for {
-				time.Sleep(1 * time.Minute)
+				time.Sleep(10 * time.Second)
+				now := time.Now().Unix()
 				globalNonceCache.Range(func(key, value interface{}) bool {
-					globalNonceCache.Delete(key)
+					if ts, ok := value.(int64); ok {
+						if now-ts > 60 {
+							globalNonceCache.Delete(key)
+						}
+					}
 					return true
 				})
 			}
@@ -123,20 +132,20 @@ func hashAddr(addr net.Addr) string {
 }
 
 // applyLLMSemanticExpansion reverte a lógica feita no Alpha.
+// [ENGULF-FIX VULN-2] DESATIVADA: A substituição cega de strings em payload TCP
+// alterava o tamanho do body sem atualizar Content-Length, permitindo HTTP Request Smuggling.
+// Proxies L4 NUNCA devem modificar payload L7. Retorna dados intactos.
 func applyLLMSemanticExpansion(data []byte) []byte {
-	str := string(data)
-	str = strings.ReplaceAll(str, "⌬HTTP1", "HTTP/1.1")
-	str = strings.ReplaceAll(str, "⌬CTJSON", "Accept: application/json")
-	str = strings.ReplaceAll(str, "⌬CONKA", "Connection: keep-alive")
-	str = strings.ReplaceAll(str, "⌬UA", "User-Agent")
-	return []byte(str)
+	return data
 }
 
 // cromDecryptPacket valida e descriptografa um pacote CROM via AES-256-GCM.
+// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+GCM_TAG]
 // Retorna (plaintext, isJitter). Se nil, pacote inválido (Hacker) → Silent Drop.
 // O GCM Seal garante INTEGRIDADE + AUTENTICIDADE: qualquer bit adulterado = rejeição total.
 func cromDecryptPacket(packet []byte) ([]byte, bool) {
-	if len(packet) < 4 {
+	// Mínimo: 4 (magic) + 8 (timestamp) + 12 (nonce) + 16 (gcm tag) = 40 bytes
+	if len(packet) < 40 {
 		return nil, false
 	}
 
@@ -146,10 +155,24 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	}
 
 	isJitter := magic == JitterMagic
-	ciphertext := packet[4:]
+
+	// [ENGULF-FIX VULN-4] Extrair e validar Timestamp autenticado contra Replay Window
+	packetTime := int64(binary.BigEndian.Uint64(packet[4:12]))
+	now := time.Now().Unix()
+	drift := now - packetTime
+	if drift < 0 {
+		drift = -drift
+	}
+	if drift > 30 {
+		log.Printf("[OMEGA-SECURITY] Pacote expirado (drift=%ds). Replay Window bloqueado.", drift)
+		return nil, false
+	}
+
+	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B] — ambos autenticados pelo GCM Tag
+	aad := packet[:12]
+	ciphertext := packet[12:]
 
 	aesgcm := getAEAD()
-
 	nonceSize := aesgcm.NonceSize() // 12 bytes padrão
 	if len(ciphertext) < nonceSize {
 		return nil, false
@@ -158,18 +181,18 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	nonce := ciphertext[:nonceSize]
 	sealed := ciphertext[nonceSize:]
 
-	// [RT-17 FIX] Validar na L7 que pacote capturado não sofrerá Replay infinito
-	nonceStr := string(nonce)
-	if _, used := globalNonceCache.Load(nonceStr); used {
-		log.Println("[OMEGA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
-		return nil, false
-	}
-	globalNonceCache.Store(nonceStr, true)
-
-	// Open valida o GCM Tag (16 bytes) — qualquer adulteração = erro = DROP
-	decrypted, err := aesgcm.Open(nil, nonce, sealed, []byte(magic))
+	// [ENGULF-FIX VULN-3] PRIMEIRO validar AES-GCM. Nunca guardar estado de pacotes não-autenticados.
+	// Isso impede OOM DoS: atacantes não-autenticados não conseguem poluir o sync.Map.
+	decrypted, err := aesgcm.Open(nil, nonce, sealed, aad)
 	if err != nil {
 		// GCM Authentication FALHOU: pacote forjado, corrompido ou com Seed errada
+		return nil, false
+	}
+
+	// [ENGULF-FIX VULN-3] SOMENTE após autenticação criptográfica, verificar replay no cache.
+	nonceStr := string(nonce)
+	if _, used := globalNonceCache.LoadOrStore(nonceStr, time.Now().Unix()); used {
+		log.Println("[OMEGA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
 		return nil, false
 	}
 
@@ -177,19 +200,16 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 		return decrypted, true
 	}
 
-	return applyLLMSemanticExpansion(decrypted), false
+	// [ENGULF-FIX VULN-2] Payload transparente — sem expansão semântica cega em L4
+	return decrypted, false
 }
 
 // cromEncrypt aplica AES-256-GCM autenticado para a resposta de volta ao Alpha.
-// Compressão Semântica → AES-GCM Seal (Nonce aleatório + Tag de integridade 16B)
+// [ENGULF Gen-5] Formato: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
 func cromEncrypt(data []byte) []byte {
-	// Compressão semântica LLM
-	str := string(data)
-	str = strings.ReplaceAll(str, "HTTP/1.1", "⌬HTTP1")
-	str = strings.ReplaceAll(str, "Accept: application/json", "⌬CTJSON")
-	str = strings.ReplaceAll(str, "Connection: keep-alive", "⌬CONKA")
-	str = strings.ReplaceAll(str, "User-Agent", "⌬UA")
-	processedData := []byte(str)
+	// [ENGULF-FIX VULN-2] Payload transparente — sem compressão semântica cega em L4.
+	// A mutação de tamanho de payload destruía Content-Length HTTP, permitindo Request Smuggling.
+	processedData := data
 
 	aesgcm := getAEAD()
 
@@ -200,12 +220,22 @@ func cromEncrypt(data []byte) []byte {
 		return nil
 	}
 
-	// Seal: cifra + autentica. AAD (Additional Authenticated Data) = magic header
-	sealed := aesgcm.Seal(nil, nonce, processedData, []byte(CromMagic))
+	// [ENGULF-FIX VULN-4] Timestamp Gen-5 para AAD autenticado contra Replay
+	tsBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(tsBytes, uint64(time.Now().Unix()))
 
-	// Pacote final: [MAGIC 4B][NONCE 12B][CIPHERTEXT+TAG]
-	packet := make([]byte, 0, 4+len(nonce)+len(sealed))
+	// AAD Gen-5: [MAGIC 4B][TIMESTAMP 8B]
+	aad := make([]byte, 0, 12)
+	aad = append(aad, []byte(CromMagic)...)
+	aad = append(aad, tsBytes...)
+
+	// Seal: cifra + autentica com AAD expandido (magic + timestamp)
+	sealed := aesgcm.Seal(nil, nonce, processedData, aad)
+
+	// Pacote final Gen-5: [MAGIC 4B][TIMESTAMP 8B][NONCE 12B][CIPHERTEXT+TAG]
+	packet := make([]byte, 0, 4+8+len(nonce)+len(sealed))
 	packet = append(packet, []byte(CromMagic)...)
+	packet = append(packet, tsBytes...)
 	packet = append(packet, nonce...)
 	packet = append(packet, sealed...)
 	return packet
