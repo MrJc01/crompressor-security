@@ -27,3 +27,16 @@ go.sum
 # OS
 .DS_Store
 Thumbs.db
+
+# Binarios e Lixo Compilado Solto pelo Gen-3 e Scripts
+crom_omega
+crom_alpha
+proxy_in
+proxy_out
+proxy_onion_relay
+dummy_backend
+
+# Ambientes / IDE
+.vscode/
+.idea/
+.env
