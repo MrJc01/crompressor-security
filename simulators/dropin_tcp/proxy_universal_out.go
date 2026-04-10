@@ -52,6 +52,9 @@ func getTenantSeed() string {
 var globalAEAD cipher.AEAD
 var onceAEAD sync.Once
 
+// [RT-17 FIX] Nonce Anti-Replay Map
+var globalNonceCache sync.Map
+
 func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
 		seed := getTenantSeed()
@@ -67,19 +70,34 @@ func getAEAD() cipher.AEAD {
 			log.Fatalf("[OMEGA-FATAL] Falha no GCM: %v", err)
 		}
 		// [RT-15 FIX] Memory Wipe of Env var
+		// ATENÇÃO: os.Setenv NÃO limpa /proc/PID/environ no Linux - Vulnerabilidade de SO mantida explícita no log.
 		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
 		tenantSeed = "WIPED_BY_SEC_POLICY"
+
+		// Inicializa Janitor para Anti-Replay cache
+		go func() {
+			for {
+				time.Sleep(1 * time.Minute)
+				globalNonceCache.Range(func(key, value interface{}) bool {
+					globalNonceCache.Delete(key)
+					return true
+				})
+			}
+		}()
 	})
 	return globalAEAD
 }
 
-// [RT-14 FIX] TCP Length-Prefix Framing
+// [RT-14 FIX] TCP Length-Prefix Framing + [RT-16 FIX] Block Limit Bounds
 func readFramedPacket(conn net.Conn) ([]byte, error) {
 	lenBuf := make([]byte, 2)
 	if _, err := io.ReadFull(conn, lenBuf); err != nil {
 		return nil, err
 	}
 	packetLen := binary.BigEndian.Uint16(lenBuf)
+	if packetLen > 32768 {
+		return nil, fmt.Errorf("length buffer oversize attack")
+	}
 	packetBuf := make([]byte, packetLen)
 	if _, err := io.ReadFull(conn, packetBuf); err != nil {
 		return nil, err
@@ -139,6 +157,14 @@ func cromDecryptPacket(packet []byte) ([]byte, bool) {
 
 	nonce := ciphertext[:nonceSize]
 	sealed := ciphertext[nonceSize:]
+
+	// [RT-17 FIX] Validar na L7 que pacote capturado não sofrerá Replay infinito
+	nonceStr := string(nonce)
+	if _, used := globalNonceCache.Load(nonceStr); used {
+		log.Println("[OMEGA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
+		return nil, false
+	}
+	globalNonceCache.Store(nonceStr, true)
 
 	// Open valida o GCM Tag (16 bytes) — qualquer adulteração = erro = DROP
 	decrypted, err := aesgcm.Open(nil, nonce, sealed, []byte(magic))
@@ -239,6 +265,8 @@ func handleAlienConnection(alienConn net.Conn) {
 		// [RT-11 FIX] Contador de pacotes inválidos mid-stream
 		invalidCount := 0
 		for {
+			// [RT-18 FIX] Retorno do timeout para prevenir Slowloris post-handshake e goroutine explosion
+			alienConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			packet, err := readFramedPacket(alienConn)
 			if err != nil {
 				if err != io.EOF {

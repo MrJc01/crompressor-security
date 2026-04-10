@@ -53,6 +53,9 @@ func GetTenantSeed() string {
 var globalAEAD cipher.AEAD
 var onceAEAD sync.Once
 
+// [RT-17 FIX] Nonce Anti-Replay Map
+var globalNonceCache sync.Map
+
 func getAEAD() cipher.AEAD {
 	onceAEAD.Do(func() {
 		seed := GetTenantSeed()
@@ -73,17 +76,31 @@ func getAEAD() cipher.AEAD {
 		// Zeroization -> Memory protect
 		os.Setenv("CROM_TENANT_SEED", "WIPED_BY_SEC_POLICY")
 		globalTenantSeed = "WIPED_BY_SEC_POLICY"
+
+		// Inicializa Janitor para Anti-Replay cache
+		go func() {
+			for {
+				time.Sleep(1 * time.Minute)
+				globalNonceCache.Range(func(key, value interface{}) bool {
+					globalNonceCache.Delete(key)
+					return true
+				})
+			}
+		}()
 	})
 	return globalAEAD
 }
 
-// [RT-14 FIX] TCP Length-Prefix Framing
+// [RT-14 FIX] TCP Length-Prefix Framing + [RT-16 FIX] Block Limit Bounds
 func readFramedPacket(conn net.Conn) ([]byte, error) {
 	lenBuf := make([]byte, 2)
 	if _, err := io.ReadFull(conn, lenBuf); err != nil {
 		return nil, err
 	}
 	packetLen := binary.BigEndian.Uint16(lenBuf)
+	if packetLen > 32768 {
+		return nil, fmt.Errorf("length buffer oversize attack")
+	}
 	packetBuf := make([]byte, packetLen)
 	if _, err := io.ReadFull(conn, packetBuf); err != nil {
 		return nil, err
@@ -167,6 +184,14 @@ func cromDecryptPacket(packet []byte) []byte {
 
 	nonce := ciphertext[:nonceSize]
 	sealed := ciphertext[nonceSize:]
+
+	// [RT-17 FIX] Validar na L7 que pacote capturado não sofrerá Replay infinito
+	nonceStr := string(nonce)
+	if _, used := globalNonceCache.Load(nonceStr); used {
+		log.Println("[ALPHA-SECURITY-FATAL] Ataque de REPLAY L7 interceptado! Bloqueado.")
+		return nil
+	}
+	globalNonceCache.Store(nonceStr, true)
 
 	// Open valida o GCM Tag — qualquer adulteração = DROP
 	decrypted, err := aesgcm.Open(nil, nonce, sealed, []byte(CromMagic))
@@ -254,6 +279,8 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 		defer wg.Done()
 		buf := make([]byte, 32768)
 		for {
+			// [RT-18 FIX] Retorno do timeout 
+			clientConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			n, err := clientConn.Read(buf)
 			if err != nil {
 				swarmConn.Close()
@@ -270,6 +297,8 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 	go func() {
 		defer wg.Done()
 		for {
+			// [RT-18 FIX] Retorno do timeout
+			swarmConn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			packet, err := readFramedPacket(swarmConn)
 			if err != nil {
 				clientConn.Close()
