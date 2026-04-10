@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -16,31 +17,50 @@ const (
 	BackendRealHost = "127.0.0.1:8080"
 	TenantSeed      = "CROM-SEC-TENANT-ALPHA-2026"
 	CromMagic       = "CROM"
+	JitterMagic     = "JITT"
 )
 
+// applyLLMSemanticExpansion reverte a lógica feita no Alpha.
+func applyLLMSemanticExpansion(data []byte) []byte {
+	str := string(data)
+	str = strings.ReplaceAll(str, "⌬HTTP1", "HTTP/1.1")
+	str = strings.ReplaceAll(str, "⌬CTJSON", "Accept: application/json")
+	str = strings.ReplaceAll(str, "⌬CONKA", "Connection: keep-alive")
+	str = strings.ReplaceAll(str, "⌬UA", "User-Agent")
+	return []byte(str)
+}
+
 // cromDecryptPacket valida e descriptografa um pacote CROM.
-// Retorna nil se o pacote não passar na validação (SILENT DROP).
-func cromDecryptPacket(packet []byte) []byte {
-	// Tamanho mínimo: 4 (magic) + 8 (nonce) + 1 (data) = 13
+// Retorna (plaintext, isJitter). Se nil, pacote inválido (Hacker).
+func cromDecryptPacket(packet []byte) ([]byte, bool) {
 	if len(packet) < 13 {
-		return nil
+		return nil, false
 	}
-	// Validar magic header — se não for "CROM", é lixo de atacante
-	if string(packet[:4]) != CromMagic {
-		return nil
+	
+	magic := string(packet[:4])
+	if magic != CromMagic && magic != JitterMagic {
+		return nil, false
 	}
+	
+	isJitter := magic == JitterMagic
+
 	nonce := packet[4:12]
 	encrypted := packet[12:]
 
 	mac := hmac.New(sha256.New, []byte(TenantSeed))
 	mac.Write([]byte("CROM_SESSION_KEY"))
-	key := mac.Sum(nil) // 32 bytes
+	key := mac.Sum(nil)
 
 	decrypted := make([]byte, len(encrypted))
 	for i, b := range encrypted {
 		decrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
 	}
-	return decrypted
+
+	if isJitter {
+		return decrypted, true
+	}
+
+	return applyLLMSemanticExpansion(decrypted), false
 }
 
 // cromEncrypt aplica XOR cíclico com chave HMAC para a resposta de volta.
@@ -52,8 +72,15 @@ func cromEncrypt(data []byte) []byte {
 	nonce := make([]byte, 8)
 	rand.Read(nonce)
 
-	encrypted := make([]byte, len(data))
-	for i, b := range data {
+	str := string(data)
+	str = strings.ReplaceAll(str, "HTTP/1.1", "⌬HTTP1")
+	str = strings.ReplaceAll(str, "Accept: application/json", "⌬CTJSON")
+	str = strings.ReplaceAll(str, "Connection: keep-alive", "⌬CONKA")
+	str = strings.ReplaceAll(str, "User-Agent", "⌬UA")
+	processedData := []byte(str)
+
+	encrypted := make([]byte, len(processedData))
+	for i, b := range processedData {
 		encrypted[i] = b ^ key[i%len(key)] ^ nonce[i%len(nonce)]
 	}
 
@@ -77,10 +104,15 @@ func handleAlienConnection(alienConn net.Conn) {
 	// ===== SILENT DROP =====
 	// Se o pacote não tem a assinatura CROM, fechar a conexão sem responder NADA.
 	// Isso impede banner grabbing e information leakage.
-	plaintext := cromDecryptPacket(initialBuf[:n])
+	plaintext, isJitt := cromDecryptPacket(initialBuf[:n])
 	if plaintext == nil {
 		log.Printf("[OMEGA-SILENT-DROP] Pacote inválido de %s (%d bytes). Dropped.", alienConn.RemoteAddr(), n)
-		// NÃO enviar nenhuma resposta. Conexão morre silenciosamente.
+		return
+	}
+	
+	if isJitt {
+		// Cover-Traffic cego P2P. Absorve a conexao sem mandar pro backend e encerra.
+		log.Printf("[OMEGA] JITTER Cover-Traffic Inicial Recebido (%d bytes). Absorvido.", n)
 		return
 	}
 
@@ -94,7 +126,6 @@ func handleAlienConnection(alienConn net.Conn) {
 	}
 	defer backendConn.Close()
 
-	// Enviar o primeiro chunk já descriptografado
 	backendConn.Write(plaintext)
 
 	var wg sync.WaitGroup
@@ -113,9 +144,13 @@ func handleAlienConnection(alienConn net.Conn) {
 				backendConn.Close()
 				return
 			}
-			pt := cromDecryptPacket(buf[:rn])
+			pt, isJt := cromDecryptPacket(buf[:rn])
 			if pt == nil {
 				log.Printf("[OMEGA-SILENT-DROP] Pacote corrompido mid-stream. Dropped.")
+				continue
+			}
+			if isJt {
+				// Cover traffic, absorvido na rede mas nunca incomoda a CPU local
 				continue
 			}
 			_, werr := backendConn.Write(pt)

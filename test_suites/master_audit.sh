@@ -13,7 +13,7 @@ echo " Data: $(date)"
 echo "=========================================================="
 
 # 0. Matar TUDO de sessões anteriores
-killall -9 proxy_in proxy_out dummy_backend alien_sniffer tcp_cannon python3 nc 2>/dev/null || true
+killall -9 proxy_in proxy_out dummy_backend alien_sniffer tcp_cannon proxy_onion_relay python3 nc 2>/dev/null || true
 fuser -k 5432/tcp 8080/tcp 9999/tcp 9955/tcp 8082/tcp 8085/tcp 6379/tcp 2>/dev/null || true
 sleep 1.0
 
@@ -25,6 +25,7 @@ go build -o bin/proxy_out ../simulators/dropin_tcp/proxy_universal_out.go 2>/dev
 go build -o bin/dummy_backend ../simulators/dropin_tcp/dummy_backend.go 2>/dev/null
 go build -o bin/alien_sniffer ../simulators/pentest/alien_sniffer.go 2>/dev/null
 go build -o bin/tcp_cannon ../simulators/pentest/tcp_cannon.go 2>/dev/null
+go build -o bin/proxy_onion_relay ../simulators/dropin_tcp/proxy_onion_relay.go 2>/dev/null
 echo "[*] Builds concluídas."
 
 # Permissões
@@ -57,6 +58,8 @@ SUITES=(
     19_payload_forgery
     20_vfs_fd_exhaust
     21_private_brain_system
+    22_onion_multi_hop_route
+    23_jitter_cover_traffic
 )
 
 echo ""
@@ -74,7 +77,7 @@ for suite in "${SUITES[@]}"; do
             echo "${suite}: TIMEOUT" > "reports/${NUM}_status.log"
         fi
         # Cleanup agressivo entre suites
-        killall -9 proxy_in proxy_out dummy_backend alien_sniffer tcp_cannon python3 nc 2>/dev/null || true
+        killall -9 proxy_in proxy_out dummy_backend alien_sniffer tcp_cannon proxy_onion_relay python3 nc 2>/dev/null || true
         fuser -k 5432/tcp 8080/tcp 9999/tcp 9955/tcp 8082/tcp 8085/tcp 6379/tcp 2>/dev/null || true
         sleep 1.0
     else
@@ -104,7 +107,7 @@ REPORT_FILE="reports/FINAL_AUDIT_REPORT.txt"
   DEV=0
   NI=0
   
-  for i in $(seq -w 1 21); do
+  for i in $(seq -w 1 23); do
       STATUS_FILE="reports/${i}_status.log"
       if [ -f "$STATUS_FILE" ]; then
           LINE=$(cat "$STATUS_FILE")
