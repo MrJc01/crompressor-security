@@ -384,9 +384,12 @@ func startJitterCoverTraffic(ctx context.Context, swarmConn net.Conn, mu *sync.M
 			}
 			// [GEN-8] Mutex para serializar writes na conexão compartilhada
 			mu.Lock()
+			// [GEN-9 RT-300 FIX] Deadline contra Jitter hang 
+			swarmConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err := writeFramedPacket(swarmConn, jittPacket)
 			mu.Unlock()
 			if err != nil {
+				swarmConn.Close() // Fecha para matar rápido se morrer
 				return // Conexão morreu
 			}
 		}
@@ -448,9 +451,14 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 			encrypted := cromEncrypt(buf[:n], CromMagic)
 			// [GEN-8] Lock para serializar com Jitter
 			swarmWriteMu.Lock()
+			// [GEN-9 RT-300 FIX] Deadline de rede e proteção Write
+			swarmConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			werr := writeFramedPacket(swarmConn, encrypted)
 			swarmWriteMu.Unlock()
 			if werr != nil {
+				// [GEN-9 RT-300 FIX] Cross-close 
+				clientConn.Close()
+				swarmConn.Close()
 				return
 			}
 		}
@@ -479,8 +487,12 @@ func handleClient(clientConn net.Conn, swarmAddr string) {
 				continue
 			}
 			invalidCount = 0
+			// [GEN-9 RT-300 FIX] Proteção L4 Client Zero-Window
+			clientConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			_, werr := clientConn.Write(plaintext)
 			if werr != nil {
+				clientConn.Close()
+				swarmConn.Close()
 				return
 			}
 		}

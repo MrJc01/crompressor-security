@@ -459,8 +459,13 @@ func handleAlienConnection(alienConn net.Conn) {
 				// Cover traffic, absorvido na rede mas nunca incomoda a CPU local
 				continue
 			}
+			// [GEN-9 RT-300 FIX] Deadline contra Backend Hang
+			backendConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			_, werr := backendConn.Write(pt)
 			if werr != nil {
+				// [GEN-9 RT-300 FIX] Cross-close imediato para acordar Theard Oposta Lida
+				alienConn.Close()
+				backendConn.Close()
 				return
 			}
 		}
@@ -481,8 +486,13 @@ func handleAlienConnection(alienConn net.Conn) {
 				return
 			}
 			encrypted := cromEncrypt(buf[:rn])
+			// [GEN-9 RT-300 FIX] Zero-Window Anti-DoS Pipeline limit (Deadline)
+			alienConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			werr := writeFramedPacket(alienConn, encrypted)
 			if werr != nil {
+				// [GEN-9 RT-300 FIX] Cross-close imediato para limpar recursos e slots MaxConn
+				alienConn.Close()
+				backendConn.Close()
 				return
 			}
 		}
