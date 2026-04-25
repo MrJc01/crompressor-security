@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"crompressor-security/pkg/crommobile"
+	"github.com/MrJc01/crompressor-security/pkg/crommobile"
 )
 
 const (
